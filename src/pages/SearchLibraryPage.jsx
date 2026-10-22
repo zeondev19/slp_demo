@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { 
   Search, Filter, X, BookmarkCheck, ArrowUpDown, 
@@ -79,6 +79,7 @@ export default function SearchLibraryPage() {
   const [saveFilterModal, setSaveFilterModal] = useState(false);
   const [saveFilterName, setSaveFilterName] = useState('');
   const [filterSavedSuccess, setFilterSavedSuccess] = useState(false);
+  const clientQueryCache = useRef(new Map());
 
   // Sync to URL params
   const updateURL = useCallback(() => {
@@ -110,13 +111,36 @@ export default function SearchLibraryPage() {
     loadMeta();
   }, []);
 
-  // Fetch lessons with query timer
+  // Fetch lessons with query timer and client-side instant cache
   useEffect(() => {
     let isMounted = true;
     updateURL();
 
+    const cacheKey = JSON.stringify({
+      q: query,
+      domain: selectedDomain,
+      target: selectedTarget,
+      level: selectedLevel,
+      activity_format: selectedFormat,
+      topic: selectedTopic,
+      sort: sortBy,
+      page,
+      limit: pageSize,
+    });
+
     async function fetchFilteredLessons() {
       const startTime = performance.now();
+
+      // Check instant client cache first
+      if (clientQueryCache.current.has(cacheKey)) {
+        const cached = clientQueryCache.current.get(cacheKey);
+        const duration = (performance.now() - startTime).toFixed(2);
+        setFilterQuerySpeed(duration);
+        setLessons(cached.lessons || []);
+        setTotal(cached.total || 0);
+        return;
+      }
+
       setLoading(true);
 
       try {
@@ -137,6 +161,7 @@ export default function SearchLibraryPage() {
           setFilterQuerySpeed(duration);
           setLessons(res.lessons || []);
           setTotal(res.total || 0);
+          clientQueryCache.current.set(cacheKey, res);
         }
       } catch (err) {
         console.error('Error fetching lessons:', err);

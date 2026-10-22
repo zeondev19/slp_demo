@@ -61,6 +61,30 @@ function mergeSearchParams(req) {
 }
 
 // -------------------------------------------------------------
+// IN-MEMORY CACHE FOR ULTRA-FAST RESPONSES (sub-10ms)
+// -------------------------------------------------------------
+const memoryCache = new Map();
+const CACHE_TTL = 3 * 60 * 1000; // 3 minutes
+
+function getCached(key) {
+  const item = memoryCache.get(key);
+  if (!item) return null;
+  if (Date.now() - item.time > CACHE_TTL) {
+    memoryCache.delete(key);
+    return null;
+  }
+  return item.data;
+}
+
+function setCached(key, data) {
+  if (memoryCache.size > 500) {
+    const oldest = memoryCache.keys().next().value;
+    memoryCache.delete(oldest);
+  }
+  memoryCache.set(key, { time: Date.now(), data });
+}
+
+// -------------------------------------------------------------
 // MAIN ENTRY HANDLER (Single Serverless Function)
 // -------------------------------------------------------------
 export default async function handler(req, res) {
@@ -296,6 +320,16 @@ async function handleLessons(req, res, segments) {
   // GET /api/lessons (List with filters)
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
+  // Enable Vercel Edge CDN caching
+  res.setHeader('Cache-Control', 'public, s-maxage=60, stale-while-revalidate=300');
+
+  // Check in-memory server cache
+  const cacheKey = `lessons:${JSON.stringify(req.query)}`;
+  const cached = getCached(cacheKey);
+  if (cached) {
+    return res.status(200).json(cached);
+  }
+
   const {
     q,
     domain,
@@ -373,9 +407,6 @@ async function handleLessons(req, res, segments) {
   }
 
   const countSQL = `SELECT COUNT(*) as total FROM slp_lessons l ${whereSQL}`;
-  const [countResult] = await pool.execute(countSQL, params);
-  const total = countResult[0].total;
-
   const dataSQL = `
     SELECT 
       l.id, l.title, l.description, l.domain, l.primary_skill, l.secondary_skill,
@@ -386,16 +417,24 @@ async function handleLessons(req, res, segments) {
     ${orderSQL}
     LIMIT ? OFFSET ?
   `;
-
   const dataParams = [...params, ...sortParams, limitNum, offset];
-  const [lessons] = await pool.execute(dataSQL, dataParams);
 
-  return res.status(200).json({
+  // Execute COUNT and SELECT in PARALLEL to cut network latency in half!
+  const [[countResult], [lessons]] = await Promise.all([
+    pool.execute(countSQL, params),
+    pool.execute(dataSQL, dataParams),
+  ]);
+
+  const total = countResult[0].total;
+  const responseData = {
     lessons,
     total,
     page: pageNum,
     totalPages: Math.ceil(total / limitNum),
-  });
+  };
+
+  setCached(cacheKey, responseData);
+  return res.status(200).json(responseData);
 }
 
 // --- CURRICULUMS ---
