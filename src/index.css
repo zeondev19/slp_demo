@@ -1,0 +1,37 @@
+@import url('https://fonts.googleapis.com/css2?family=Lora:wght@400;600;700&family=Open+Sans:wght@400;500;600;700&family=Source+Code+Pro:wght@400&display=swap');
+@import 'tailwindcss';
+
+@theme {
+  --color-primary: #C2410C;
+  --color-primary-hover: #9A3412;
+  --color-primary-active: #7C2D12;
+  --color-secondary: #D4A373;
+  --color-tertiary: #365314;
+  --color-bg: #FFFBF5;
+  --color-surface: #FFFFFF;
+  --color-success: #22C55E;
+  --color-warning: #F59E0B;
+  --color-error: #DC2626;
+  --color-info: #3B82F6;
+  --color-border: #E7E5E4;
+  --color-border-hover: #D6D3D1;
+  --color-border-strong: #A8A29E;
+  --color-text: #1C1917;
+  --color-text-muted: #57534E;
+  --color-text-light: #A8A29E;
+  --color-warm-bg: #FDF6EC;
+  --font-heading: 'Lora', serif;
+  --font-body: 'Open Sans', sans-serif;
+  --font-mono: 'Source Code Pro', monospace;
+}
+
+body {
+  font-family: var(--font-body);
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  margin: 0;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-heading);
+}
