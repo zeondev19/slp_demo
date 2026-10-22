@@ -5,7 +5,7 @@ let pool;
 export function getPool() {
   if (!pool) {
     if (!process.env.MYSQL_HOST) {
-      throw new Error('Database configuration missing: MYSQL_HOST is not set in environment.');
+      throw new Error('Database configuration missing: MYSQL_HOST is not set in environment variables.');
     }
 
     pool = mysql.createPool({
@@ -15,9 +15,9 @@ export function getPool() {
       password: process.env.MYSQL_PASSWORD,
       database: process.env.MYSQL_DATABASE,
       waitForConnections: true,
-      connectionLimit: 10,
+      connectionLimit: 5,
       queueLimit: 0,
-      connectTimeout: 10000,
+      connectTimeout: 5000,
       ssl: process.env.MYSQL_SSL === 'true' ? { rejectUnauthorized: false } : undefined,
     });
   }

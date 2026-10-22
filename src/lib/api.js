@@ -20,8 +20,17 @@ async function request(path, options = {}) {
   const res = await fetch(fullUrl, { ...options, headers });
 
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: `HTTP ${res.status}: Failed to fetch from database.` }));
-    throw new Error(err.error || `HTTP ${res.status}: Database request failed.`);
+    const rawText = await res.text().catch(() => '');
+    let errMsg = `HTTP ${res.status}: Database request failed.`;
+    try {
+      const data = JSON.parse(rawText);
+      if (data && data.error) errMsg = data.error;
+    } catch {
+      if (rawText) {
+        errMsg = rawText.length > 200 ? `HTTP ${res.status}: ${rawText.slice(0, 200)}...` : `HTTP ${res.status}: ${rawText}`;
+      }
+    }
+    throw new Error(errMsg);
   }
 
   return res.json();

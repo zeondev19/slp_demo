@@ -72,9 +72,50 @@ export default async function handler(req, res) {
   const body = ['POST', 'PUT', 'PATCH'].includes(method) ? await parseBody(req) : {};
 
   try {
-    // Health / Root check
-    if (segments.length === 0) {
-      return res.status(200).json({ status: 'ok', service: 'SLP Curriculum API' });
+    // Health / Root check / Diagnostics
+    if (segments.length === 0 || root === 'health' || root === 'test-db') {
+      const hasHost = !!process.env.MYSQL_HOST;
+      const hasUser = !!process.env.MYSQL_USER;
+      const hasDb = !!process.env.MYSQL_DATABASE;
+
+      if (!hasHost || !hasUser || !hasDb) {
+        return res.status(200).json({
+          status: 'warning',
+          service: 'SLP Curriculum API',
+          database: {
+            configured: false,
+            message: 'Database environment variables are missing in Vercel settings.',
+            MYSQL_HOST: hasHost ? 'SET' : 'MISSING',
+            MYSQL_USER: hasUser ? 'SET' : 'MISSING',
+            MYSQL_DATABASE: hasDb ? 'SET' : 'MISSING',
+          },
+        });
+      }
+
+      try {
+        const pool = getPool();
+        const [rows] = await pool.execute('SELECT COUNT(*) AS total_lessons FROM slp_lessons');
+        return res.status(200).json({
+          status: 'ok',
+          service: 'SLP Curriculum API',
+          database: {
+            configured: true,
+            connected: true,
+            totalLessons: rows[0].total_lessons,
+          },
+        });
+      } catch (dbErr) {
+        return res.status(200).json({
+          status: 'error',
+          service: 'SLP Curriculum API',
+          database: {
+            configured: true,
+            connected: false,
+            error: dbErr.message,
+            code: dbErr.code,
+          },
+        });
+      }
     }
 
     const root = segments[0].toLowerCase();
