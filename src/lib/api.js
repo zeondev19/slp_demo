@@ -75,12 +75,12 @@ export const api = {
   deletePlaylist: (id) =>
     request(`/api/playlists/${id}`, { method: 'DELETE' }),
   addToPlaylist: (playlistId, lessonId) =>
-    request(`/api/playlists/${playlistId}/items`, {
+    request('/api/playlists/items', {
       method: 'POST',
-      body: JSON.stringify({ lesson_id: lessonId }),
+      body: JSON.stringify({ playlist_id: playlistId, lesson_id: lessonId }),
     }),
   removeFromPlaylist: (playlistId, itemId) =>
-    request(`/api/playlists/${playlistId}/items?itemId=${itemId}`, {
+    request(`/api/playlists/items?playlist_id=${playlistId}&itemId=${itemId}`, {
       method: 'DELETE',
     }),
 
