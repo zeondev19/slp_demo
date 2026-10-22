@@ -72,6 +72,8 @@ export default async function handler(req, res) {
   const body = ['POST', 'PUT', 'PATCH'].includes(method) ? await parseBody(req) : {};
 
   try {
+    const root = segments[0]?.toLowerCase() || '';
+
     // Health / Root check / Diagnostics
     if (segments.length === 0 || root === 'health' || root === 'test-db') {
       const hasHost = !!process.env.MYSQL_HOST;
@@ -117,8 +119,6 @@ export default async function handler(req, res) {
         });
       }
     }
-
-    const root = segments[0].toLowerCase();
 
     // 1. Auth routes
     if (root === 'auth') {
