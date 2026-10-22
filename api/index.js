@@ -76,20 +76,16 @@ export default async function handler(req, res) {
 
     // Health / Root check / Diagnostics
     if (segments.length === 0 || root === 'health' || root === 'test-db') {
+      const isBridge = !!process.env.MYSQL_BRIDGE_URL;
       const hasHost = !!process.env.MYSQL_HOST;
-      const hasUser = !!process.env.MYSQL_USER;
-      const hasDb = !!process.env.MYSQL_DATABASE;
 
-      if (!hasHost || !hasUser || !hasDb) {
+      if (!isBridge && !hasHost) {
         return res.status(200).json({
           status: 'warning',
           service: 'SLP Curriculum API',
           database: {
             configured: false,
-            message: 'Database environment variables are missing in Vercel settings.',
-            MYSQL_HOST: hasHost ? 'SET' : 'MISSING',
-            MYSQL_USER: hasUser ? 'SET' : 'MISSING',
-            MYSQL_DATABASE: hasDb ? 'SET' : 'MISSING',
+            message: 'Neither MYSQL_BRIDGE_URL nor MYSQL_HOST is set in Vercel settings.',
           },
         });
       }
@@ -101,6 +97,7 @@ export default async function handler(req, res) {
           status: 'ok',
           service: 'SLP Curriculum API',
           database: {
+            mode: isBridge ? 'PHP HTTPS Bridge (Localhost)' : 'Direct MySQL TCP',
             configured: true,
             connected: true,
             totalLessons: rows[0].total_lessons,
@@ -111,6 +108,7 @@ export default async function handler(req, res) {
           status: 'error',
           service: 'SLP Curriculum API',
           database: {
+            mode: isBridge ? 'PHP HTTPS Bridge (Localhost)' : 'Direct MySQL TCP',
             configured: true,
             connected: false,
             error: dbErr.message,
