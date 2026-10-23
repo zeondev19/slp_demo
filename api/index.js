@@ -415,7 +415,7 @@ async function handleLessons(req, res, segments, body) {
     return res.status(200).json({ lesson: rows[0] });
   }
 
-  // GET /api/lessons (List with filters)
+  // GET /api/lessons (List with filters or full dataset for client-side instant filtering)
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
   // Enable Vercel Edge CDN caching
@@ -426,6 +426,22 @@ async function handleLessons(req, res, segments, body) {
   const cached = getCached(cacheKey);
   if (cached) {
     return res.status(200).json(cached);
+  }
+
+  // Fast path: return all lessons in 1 single query (no COUNT, no parallel bridge throttling!)
+  // Enables < 2ms client-side filtering & sorting across all 1,000+ lessons as required by PRD.
+  if (req.query.all === '1') {
+    const [allLessons] = await pool.execute(
+      `SELECT 
+        l.id, l.title, l.description, l.domain, l.primary_skill, l.secondary_skill,
+        l.target, l.level, l.activity_format, l.topic, l.duration_minutes,
+        l.thumbnail_url, l.genially_embed_url, l.teaching_script, l.is_new, l.times_used, l.created_at
+      FROM slp_lessons l
+      ORDER BY l.id DESC`
+    );
+    const allData = { lessons: allLessons, total: allLessons.length };
+    setCached(cacheKey, allData);
+    return res.status(200).json(allData);
   }
 
   const {
@@ -517,11 +533,9 @@ async function handleLessons(req, res, segments, body) {
   `;
   const dataParams = [...params, ...sortParams, limitNum, offset];
 
-  // Execute COUNT and SELECT in PARALLEL to cut network latency in half!
-  const [[countResult], [lessons]] = await Promise.all([
-    pool.execute(countSQL, params),
-    pool.execute(dataSQL, dataParams),
-  ]);
+  // Execute sequentially to avoid cPanel Rumahweb concurrent PHP Entry Process throttling!
+  const [countResult] = await pool.execute(countSQL, params);
+  const [lessons] = await pool.execute(dataSQL, dataParams);
 
   const total = countResult[0].total;
   const responseData = {
@@ -548,25 +562,23 @@ async function handleCurriculums(req, res, segments) {
     const cached = getCached(cacheKey);
     if (cached) return res.status(200).json(cached);
 
-    const [[currRows], [steps]] = await Promise.all([
-      pool.execute(
-        `SELECT id, title, description, domain, target, level, thumbnail_url, total_steps, created_at
-         FROM slp_curriculums WHERE id = ? LIMIT 1`,
-        [id]
-      ),
-      pool.execute(
-        `SELECT 
-          cs.id AS step_id, cs.step_number, cs.suggested_next_lesson_id,
-          l.id AS lesson_id, l.title, l.description, l.domain, l.primary_skill,
-          l.secondary_skill, l.target, l.level, l.activity_format, l.topic,
-          l.duration_minutes, l.thumbnail_url, l.times_used, l.genially_embed_url, l.teaching_script
-        FROM slp_curriculum_steps cs
-        LEFT JOIN slp_lessons l ON l.id = cs.lesson_id
-        WHERE cs.curriculum_id = ?
-        ORDER BY cs.step_number ASC`,
-        [id]
-      ),
-    ]);
+    const [currRows] = await pool.execute(
+      `SELECT id, title, description, domain, target, level, thumbnail_url, total_steps, created_at
+       FROM slp_curriculums WHERE id = ? LIMIT 1`,
+      [id]
+    );
+    const [steps] = await pool.execute(
+      `SELECT 
+        cs.id AS step_id, cs.step_number, cs.suggested_next_lesson_id,
+        l.id AS lesson_id, l.title, l.description, l.domain, l.primary_skill,
+        l.secondary_skill, l.target, l.level, l.activity_format, l.topic,
+        l.duration_minutes, l.thumbnail_url, l.times_used, l.genially_embed_url, l.teaching_script
+      FROM slp_curriculum_steps cs
+      LEFT JOIN slp_lessons l ON l.id = cs.lesson_id
+      WHERE cs.curriculum_id = ?
+      ORDER BY cs.step_number ASC`,
+      [id]
+    );
 
     if (currRows.length === 0) {
       return res.status(404).json({ error: 'Curriculum not found.' });
@@ -612,62 +624,61 @@ async function handleDashboard(req, res) {
 
   const pool = getPool();
 
-  // Fast 2-batch parallel execution (safe for Rumahweb cPanel & 2.5x faster on cold start)
-  const [[recentlyUsed], [folders]] = await Promise.all([
-    pool.execute(
-      `SELECT 
-        p.lesson_id, p.last_opened_at, p.times_opened, p.completed,
-        l.id, l.title, l.description, l.domain, l.primary_skill, l.secondary_skill, l.target,
-        l.level, l.activity_format, l.duration_minutes, l.thumbnail_url, l.genially_embed_url, l.teaching_script
-      FROM slp_user_progress p
-      JOIN slp_lessons l ON l.id = p.lesson_id
-      WHERE p.user_id = ?
-      ORDER BY p.last_opened_at DESC
-      LIMIT 8`,
-      [userId]
-    ),
-    pool.execute(
-      `SELECT 
-        pl.id, pl.name, pl.description, pl.created_at,
-        COUNT(pi.id) AS item_count
-      FROM slp_playlists pl
-      LEFT JOIN slp_playlist_items pi ON pi.playlist_id = pl.id
-      WHERE pl.user_id = ?
-      GROUP BY pl.id
-      ORDER BY pl.created_at DESC`,
-      [userId]
-    ),
-  ]);
+  // Strict sequential execution (1 PHP worker at a time prevents Rumahweb 10-20s throttling!)
+  const [recentlyUsed] = await pool.execute(
+    `SELECT 
+      p.lesson_id, p.last_opened_at, p.times_opened, p.completed,
+      l.id, l.title, l.description, l.domain, l.primary_skill, l.secondary_skill, l.target,
+      l.level, l.activity_format, l.duration_minutes, l.thumbnail_url, l.genially_embed_url, l.teaching_script
+    FROM slp_user_progress p
+    JOIN slp_lessons l ON l.id = p.lesson_id
+    WHERE p.user_id = ?
+    ORDER BY p.last_opened_at DESC
+    LIMIT 8`,
+    [userId]
+  );
 
-  const [[favorites], [newlyAdded], [savedFilters]] = await Promise.all([
-    pool.execute(
-      `SELECT 
-        f.id AS favorite_id, f.created_at AS favorited_at,
-        l.id, l.title, l.description, l.domain, l.primary_skill, l.secondary_skill,
-        l.target, l.level, l.activity_format, l.duration_minutes, l.thumbnail_url, l.genially_embed_url, l.teaching_script
-      FROM slp_favorites f
-      JOIN slp_lessons l ON l.id = f.lesson_id
-      WHERE f.user_id = ?
-      ORDER BY f.created_at DESC
-      LIMIT 6`,
-      [userId]
-    ),
-    pool.execute(
-      `SELECT 
-        id, title, description, domain, primary_skill, secondary_skill, target,
-        level, activity_format, duration_minutes, thumbnail_url, genially_embed_url, teaching_script, created_at
-      FROM slp_lessons
-      ORDER BY id DESC
-      LIMIT 8`
-    ),
-    pool.execute(
-      `SELECT id, name, filters, filter_json, created_at
-       FROM slp_saved_filters
-       WHERE user_id = ?
-       ORDER BY created_at DESC`,
-      [userId]
-    ),
-  ]);
+  const [folders] = await pool.execute(
+    `SELECT 
+      pl.id, pl.name, pl.description, pl.created_at,
+      COUNT(pi.id) AS item_count
+    FROM slp_playlists pl
+    LEFT JOIN slp_playlist_items pi ON pi.playlist_id = pl.id
+    WHERE pl.user_id = ?
+    GROUP BY pl.id
+    ORDER BY pl.created_at DESC`,
+    [userId]
+  );
+
+  const [favorites] = await pool.execute(
+    `SELECT 
+      f.id AS favorite_id, f.created_at AS favorited_at,
+      l.id, l.title, l.description, l.domain, l.primary_skill, l.secondary_skill,
+      l.target, l.level, l.activity_format, l.duration_minutes, l.thumbnail_url, l.genially_embed_url, l.teaching_script
+    FROM slp_favorites f
+    JOIN slp_lessons l ON l.id = f.lesson_id
+    WHERE f.user_id = ?
+    ORDER BY f.created_at DESC
+    LIMIT 6`,
+    [userId]
+  );
+
+  const [newlyAdded] = await pool.execute(
+    `SELECT 
+      id, title, description, domain, primary_skill, secondary_skill, target,
+      level, activity_format, duration_minutes, thumbnail_url, genially_embed_url, teaching_script, is_new, created_at
+    FROM slp_lessons
+    ORDER BY id DESC
+    LIMIT 8`
+  );
+
+  const [savedFilters] = await pool.execute(
+    `SELECT id, name, filters, filter_json, created_at
+     FROM slp_saved_filters
+     WHERE user_id = ?
+     ORDER BY created_at DESC`,
+    [userId]
+  );
 
   const continueLesson = recentlyUsed.length > 0 ? recentlyUsed[0] : null;
 
@@ -750,27 +761,26 @@ async function handlePlaylists(req, res, segments, body) {
     const id = segments[1];
 
     if (req.method === 'GET') {
-      const [[plRows], [items]] = await Promise.all([
-        pool.execute(
-          'SELECT id, name, description, created_at, updated_at FROM slp_playlists WHERE id = ? AND user_id = ? LIMIT 1',
-          [id, userId]
-        ),
-        pool.execute(
-          `SELECT 
-            pi.id AS item_id, pi.sort_order, pi.notes, pi.added_at,
-            l.id AS lesson_id, l.title, l.description, l.domain, l.primary_skill,
-            l.target, l.level, l.activity_format, l.duration_minutes, l.thumbnail_url, l.genially_embed_url, l.teaching_script
-          FROM slp_playlist_items pi
-          JOIN slp_lessons l ON l.id = pi.lesson_id
-          WHERE pi.playlist_id = ?
-          ORDER BY pi.sort_order ASC, pi.added_at ASC`,
-          [id]
-        ),
-      ]);
+      const [plRows] = await pool.execute(
+        'SELECT id, name, description, created_at, updated_at FROM slp_playlists WHERE id = ? AND user_id = ? LIMIT 1',
+        [id, userId]
+      );
 
       if (plRows.length === 0) {
         return res.status(404).json({ error: 'Playlist not found.' });
       }
+
+      const [items] = await pool.execute(
+        `SELECT 
+          pi.id AS item_id, pi.sort_order, pi.notes, pi.added_at,
+          l.id AS lesson_id, l.title, l.description, l.domain, l.primary_skill,
+          l.target, l.level, l.activity_format, l.duration_minutes, l.thumbnail_url, l.genially_embed_url, l.teaching_script
+        FROM slp_playlist_items pi
+        JOIN slp_lessons l ON l.id = pi.lesson_id
+        WHERE pi.playlist_id = ?
+        ORDER BY pi.sort_order ASC, pi.added_at ASC`,
+        [id]
+      );
 
       return res.status(200).json({
         playlist: { ...plRows[0], items },

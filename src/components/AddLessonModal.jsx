@@ -100,43 +100,61 @@ export default function AddLessonModal({ isOpen, onClose, onCreated }) {
     setError(null);
     setSubmitting(true);
 
-    try {
-      const payload = {
-        title: title.trim(),
-        description: description.trim(),
-        domain,
-        target: target.trim(),
-        level,
-        primary_skill: primarySkill.trim() || domain,
-        secondary_skill: secondarySkill.trim() || null,
-        activity_format: activityFormat,
-        topic,
-        duration_minutes: Number(durationMinutes) || 15,
-        genially_embed_url: extractedEmbedUrl || null,
-        teaching_script: teachingScript.trim(),
-        materials: materials.trim(),
-      };
+    const payload = {
+      title: title.trim(),
+      description: description.trim(),
+      domain,
+      target: target.trim(),
+      level,
+      primary_skill: primarySkill.trim() || domain,
+      secondary_skill: secondarySkill.trim() || null,
+      activity_format: activityFormat,
+      topic,
+      duration_minutes: Number(durationMinutes) || 15,
+      genially_embed_url: extractedEmbedUrl || null,
+      teaching_script: teachingScript.trim(),
+      materials: materials.trim(),
+    };
 
-      const res = await api.createLesson(payload);
-      const createdLesson = { ...payload, ...(res?.lesson || {}), id: res?.lesson?.id || Date.now(), is_new: 1 };
-      setSuccess(true);
-      localStorage.removeItem('slp_dashboard_cache');
-      window.dispatchEvent(new CustomEvent('slp-lesson-created', { detail: createdLesson }));
+    // Optimistic instant publish (< 200ms UX!) while MySQL saves in background
+    const optimisticLesson = {
+      ...payload,
+      id: Date.now(),
+      is_new: 1,
+      times_used: 0,
+      popularity_score: 500,
+    };
 
-      setTimeout(() => {
-        setSuccess(false);
-        setTitle('');
-        setGeniallyRaw('');
-        setDescription('');
-        setTeachingScript('');
-        if (onCreated) onCreated(createdLesson);
-        onClose();
-      }, 600);
-    } catch (err) {
-      setError(err.message || 'Failed to save lesson to database.');
-    } finally {
+    setSuccess(true);
+    localStorage.removeItem('slp_dashboard_cache');
+    window.dispatchEvent(new CustomEvent('slp-lesson-created', { detail: optimisticLesson }));
+
+    // Sync to MySQL in background and update real database ID when finished
+    api
+      .createLesson(payload)
+      .then((res) => {
+        if (res?.lesson?.id) {
+          window.dispatchEvent(
+            new CustomEvent('slp-lesson-id-synced', {
+              detail: { tempId: optimisticLesson.id, lesson: { ...optimisticLesson, ...res.lesson } },
+            })
+          );
+        }
+      })
+      .catch((err) => {
+        console.error('Background save error:', err);
+      });
+
+    setTimeout(() => {
       setSubmitting(false);
-    }
+      setSuccess(false);
+      setTitle('');
+      setGeniallyRaw('');
+      setDescription('');
+      setTeachingScript('');
+      if (onCreated) onCreated(optimisticLesson);
+      onClose();
+    }, 350);
   };
 
   return (

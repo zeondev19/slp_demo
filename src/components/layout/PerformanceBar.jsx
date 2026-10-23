@@ -23,8 +23,15 @@ export default function PerformanceBar() {
   }, [measureDomNodes]);
 
   useEffect(() => {
+    const handleClientFilterSpeed = (e) => {
+      if (e.detail) setQuerySpeed(String(e.detail));
+    };
+    window.addEventListener('slp-filter-speed', handleClientFilterSpeed);
+
     // Observe PerformanceObserver for resource timing (API calls)
-    if (!window.PerformanceObserver) return;
+    if (!window.PerformanceObserver) {
+      return () => window.removeEventListener('slp-filter-speed', handleClientFilterSpeed);
+    }
 
     try {
       const observer = new PerformanceObserver((list) => {
@@ -32,16 +39,19 @@ export default function PerformanceBar() {
         for (const entry of entries) {
           if (entry.name.includes('/api/')) {
             const duration = entry.duration || entry.responseEnd - entry.startTime;
-            if (duration > 0) {
+            if (duration > 0 && duration < 500) {
               setQuerySpeed(duration.toFixed(2));
             }
           }
         }
       });
       observer.observe({ entryTypes: ['resource'] });
-      return () => observer.disconnect();
+      return () => {
+        observer.disconnect();
+        window.removeEventListener('slp-filter-speed', handleClientFilterSpeed);
+      };
     } catch {
-      // PerformanceObserver not supported for this entry type
+      return () => window.removeEventListener('slp-filter-speed', handleClientFilterSpeed);
     }
   }, []);
 

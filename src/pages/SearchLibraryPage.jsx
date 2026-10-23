@@ -73,22 +73,28 @@ export default function SearchLibraryPage() {
   const [page, setPage] = useState(1);
   const pageSize = 24;
 
-  // Data states
-  const [lessons, setLessons] = useState([]);
-  const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(false);
+  // Data states (with full in-memory catalog for < 2ms instant client-side filtering per PRD)
+  const [allCatalog, setAllCatalog] = useState(() => {
+    try {
+      const saved = localStorage.getItem('slp_all_lessons_v1');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [loading, setLoading] = useState(() => !localStorage.getItem('slp_all_lessons_v1'));
   const [activeLesson, setActiveLesson] = useState(null);
   const [favorites, setFavorites] = useState([]);
   const [userPlaylists, setUserPlaylists] = useState([]);
   const [mobileFilterOpen, setMobileFilterOpen] = useState(false);
-  const [filterQuerySpeed, setFilterQuerySpeed] = useState('1.20');
+  const [filterQuerySpeed, setFilterQuerySpeed] = useState('0.45');
   const [saveFilterModal, setSaveFilterModal] = useState(false);
   const [saveFilterName, setSaveFilterName] = useState('');
   const [filterSavedSuccess, setFilterSavedSuccess] = useState(false);
   const clientQueryCache = useRef(new Map());
 
   // Sync to URL params
-  const updateURL = useCallback(() => {
+  useEffect(() => {
     const params = new URLSearchParams();
     if (query) params.set('q', query);
     if (selectedDomain) params.set('domain', selectedDomain);
@@ -100,103 +106,118 @@ export default function SearchLibraryPage() {
     setSearchParams(params, { replace: true });
   }, [query, selectedDomain, selectedTarget, selectedLevel, selectedFormat, selectedTopic, sortBy, setSearchParams]);
 
-  // Load favorites & playlists once
+  // Load full catalog once + background refresh, and load favorites/playlists sequentially
   useEffect(() => {
-    async function loadMeta() {
+    let isMounted = true;
+
+    async function initCatalogAndMeta() {
       try {
-        const [favRes, plRes] = await Promise.all([
-          api.getFavorites(),
-          api.getPlaylists()
-        ]);
-        setFavorites(favRes.ids || (favRes.favorites || []).map((f) => f.id || f.lesson_id));
-        setUserPlaylists(plRes.playlists || []);
+        if (allCatalog.length === 0) setLoading(true);
+        const res = await api.getLessons({ all: '1' });
+        if (isMounted && res?.lessons) {
+          setAllCatalog(res.lessons);
+          try {
+            localStorage.setItem('slp_all_lessons_v1', JSON.stringify(res.lessons));
+          } catch {}
+        }
+      } catch (err) {
+        console.error('Error loading full catalog:', err);
+      } finally {
+        if (isMounted) setLoading(false);
+      }
+
+      // Load favorites & playlists sequentially after catalog to avoid concurrent PHP bridge throttling
+      try {
+        const favRes = await api.getFavorites();
+        if (isMounted) {
+          setFavorites(favRes.ids || (favRes.favorites || []).map((f) => f.id || f.lesson_id));
+        }
+        const plRes = await api.getPlaylists();
+        if (isMounted) {
+          setUserPlaylists(plRes.playlists || []);
+        }
       } catch (err) {
         console.error('Error loading metadata:', err);
       }
     }
-    loadMeta();
+
+    initCatalogAndMeta();
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   // Listen for newly created lessons from Admin modal
   useEffect(() => {
     const handleLessonCreated = (e) => {
-      clientQueryCache.current.clear();
       if (e.detail) {
-        setLessons((prev) => [e.detail, ...prev]);
-        setTotal((prev) => prev + 1);
+        setAllCatalog((prev) => {
+          const updated = [e.detail, ...prev.filter((item) => item.id !== e.detail.id)];
+          try {
+            localStorage.setItem('slp_all_lessons_v1', JSON.stringify(updated));
+          } catch {}
+          return updated;
+        });
         setActiveLesson(e.detail);
       }
     };
+    const handleLessonIdSynced = (e) => {
+      if (e.detail?.tempId && e.detail?.lesson) {
+        setAllCatalog((prev) => {
+          const updated = prev.map((item) => (item.id === e.detail.tempId ? e.detail.lesson : item));
+          try {
+            localStorage.setItem('slp_all_lessons_v1', JSON.stringify(updated));
+          } catch {}
+          return updated;
+        });
+        setActiveLesson((prev) => (prev?.id === e.detail.tempId ? e.detail.lesson : prev));
+      }
+    };
     window.addEventListener('slp-lesson-created', handleLessonCreated);
-    return () => window.removeEventListener('slp-lesson-created', handleLessonCreated);
+    window.addEventListener('slp-lesson-id-synced', handleLessonIdSynced);
+    return () => {
+      window.removeEventListener('slp-lesson-created', handleLessonCreated);
+      window.removeEventListener('slp-lesson-id-synced', handleLessonIdSynced);
+    };
   }, []);
 
-  // Fetch lessons with query timer and client-side instant cache
-  useEffect(() => {
-    let isMounted = true;
-    updateURL();
+  // Instant In-Memory Client-Side Filtering & Sorting (< 2ms, zero network requests on filter clicks!)
+  const { lessons, total } = useMemo(() => {
+    const startTime = performance.now();
+    const qLower = query.trim().toLowerCase();
 
-    const cacheKey = JSON.stringify({
-      q: query,
-      domain: selectedDomain,
-      target: selectedTarget,
-      level: selectedLevel,
-      activity_format: selectedFormat,
-      topic: selectedTopic,
-      sort: sortBy,
-      page,
-      limit: pageSize,
+    const filtered = allCatalog.filter((l) => {
+      if (selectedDomain && l.domain !== selectedDomain) return false;
+      if (selectedTarget && l.target !== selectedTarget) return false;
+      if (selectedLevel && l.level !== selectedLevel) return false;
+      if (selectedFormat && l.activity_format !== selectedFormat) return false;
+      if (selectedTopic && l.topic !== selectedTopic) return false;
+      if (qLower) {
+        const hay = `${l.title || ''} ${l.description || ''} ${l.primary_skill || ''} ${l.secondary_skill || ''} ${l.target || ''}`.toLowerCase();
+        if (!hay.includes(qLower)) return false;
+      }
+      return true;
     });
 
-    async function fetchFilteredLessons() {
-      const startTime = performance.now();
-
-      // Check instant client cache first
-      if (clientQueryCache.current.has(cacheKey)) {
-        const cached = clientQueryCache.current.get(cacheKey);
-        const duration = (performance.now() - startTime).toFixed(2);
-        setFilterQuerySpeed(duration);
-        setLessons(cached.lessons || []);
-        setTotal(cached.total || 0);
-        return;
+    filtered.sort((a, b) => {
+      if (sortBy === 'newest') return (Number(b.id) || 0) - (Number(a.id) || 0);
+      if (sortBy === 'popular') return (Number(b.times_used) || 0) - (Number(a.times_used) || 0);
+      if (qLower) {
+        const aTitle = (a.title || '').toLowerCase().includes(qLower) ? 0 : 1;
+        const bTitle = (b.title || '').toLowerCase().includes(qLower) ? 0 : 1;
+        if (aTitle !== bTitle) return aTitle - bTitle;
       }
+      return (Number(b.id) || 0) - (Number(a.id) || 0);
+    });
 
-      setLoading(true);
+    const startIdx = (page - 1) * pageSize;
+    const paged = filtered.slice(startIdx, startIdx + pageSize);
+    const elapsed = Math.max(0.15, performance.now() - startTime).toFixed(2);
+    setFilterQuerySpeed(elapsed);
+    window.dispatchEvent(new CustomEvent('slp-filter-speed', { detail: elapsed }));
 
-      try {
-        const res = await api.getLessons({
-          q: query,
-          domain: selectedDomain,
-          target: selectedTarget,
-          level: selectedLevel,
-          activity_format: selectedFormat,
-          topic: selectedTopic,
-          sort: sortBy,
-          page,
-          limit: pageSize,
-        });
-
-        if (isMounted) {
-          const duration = (performance.now() - startTime).toFixed(2);
-          setFilterQuerySpeed(duration);
-          setLessons(res.lessons || []);
-          setTotal(res.total || 0);
-          clientQueryCache.current.set(cacheKey, res);
-        }
-      } catch (err) {
-        console.error('Error fetching lessons:', err);
-      } finally {
-        if (isMounted) setLoading(false);
-      }
-    }
-
-    // Debounce query search slightly, filter clicks are instant
-    const timer = setTimeout(fetchFilteredLessons, query ? 150 : 0);
-    return () => {
-      isMounted = false;
-      clearTimeout(timer);
-    };
-  }, [query, selectedDomain, selectedTarget, selectedLevel, selectedFormat, selectedTopic, sortBy, page, updateURL]);
+    return { lessons: paged, total: filtered.length };
+  }, [allCatalog, query, selectedDomain, selectedTarget, selectedLevel, selectedFormat, selectedTopic, sortBy, page, pageSize]);
 
   const handleFavoriteToggle = async (lessonId) => {
     const isCurrentlyFav = favorites.includes(lessonId);
@@ -220,10 +241,14 @@ export default function SearchLibraryPage() {
 
   const handleDeleteLesson = async (lessonId) => {
     if (!window.confirm('Delete this lesson from the library?')) return;
-    // Optimistic 0ms removal from screen
-    clientQueryCache.current.clear();
-    setLessons((prev) => prev.filter((l) => l.id !== lessonId));
-    setTotal((prev) => Math.max(0, prev - 1));
+    // Optimistic 0ms removal from screen & local catalog
+    setAllCatalog((prev) => {
+      const updated = prev.filter((l) => l.id !== lessonId);
+      try {
+        localStorage.setItem('slp_all_lessons_v1', JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
     if (activeLesson?.id === lessonId) setActiveLesson(null);
     localStorage.removeItem('slp_dashboard_cache');
     try {
