@@ -6,6 +6,17 @@ import {
 } from 'lucide-react';
 import Badge from './ui/Badge';
 
+const SEED_DUMMY_GENIALLY = /^https:\/\/view\.genially\.com\/embed\/64a1b2c3d4e5f6a7b8c9d/i;
+
+function extractEmbedUrl(rawInput) {
+  if (!rawInput || typeof rawInput !== 'string') return '';
+  const trimmed = rawInput.trim();
+  const srcMatch = trimmed.match(/<iframe[^>]+src=["']([^"']+)["']/i);
+  const url = srcMatch ? srcMatch[1].trim() : trimmed;
+  if (SEED_DUMMY_GENIALLY.test(url)) return '';
+  return /^https?:\/\//i.test(url) ? url : '';
+}
+
 export default function LessonModal({
   lesson,
   isOpen,
@@ -49,6 +60,7 @@ export default function LessonModal({
 
   if (!isOpen || !lesson) return null;
 
+  const liveEmbedUrl = extractEmbedUrl(lesson.genially_embed_url);
   const totalSlides = 5;
 
   const handleNotesChange = (e) => {
@@ -168,24 +180,51 @@ export default function LessonModal({
               <div className="flex items-center gap-2">
                 <span className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
                 <span className="font-mono text-[11px] text-stone-300">
-                  Genially Headless Interactive Embed Engine
+                  {liveEmbedUrl ? 'Live Genially Interactive Embed' : 'Genially Headless Interactive Embed Engine'}
                 </span>
               </div>
               <div className="flex items-center gap-3">
-                <span>Slide {currentSlide} of {totalSlides}</span>
-                <button
-                  type="button"
-                  onClick={() => setCurrentSlide(1)}
-                  title="Reset slide deck"
-                  className="hover:text-white transition-colors cursor-pointer"
-                >
-                  <RotateCcw className="w-3.5 h-3.5" />
-                </button>
+                {liveEmbedUrl ? (
+                  <a
+                    href={liveEmbedUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-[11px] text-stone-300 hover:text-white transition-colors"
+                  >
+                    <span>Open Fullscreen</span>
+                    <ExternalLink className="w-3 h-3" />
+                  </a>
+                ) : (
+                  <>
+                    <span>Slide {currentSlide} of {totalSlides}</span>
+                    <button
+                      type="button"
+                      onClick={() => setCurrentSlide(1)}
+                      title="Reset slide deck"
+                      className="hover:text-white transition-colors cursor-pointer"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                    </button>
+                  </>
+                )}
               </div>
             </div>
 
             {/* Interactive Slide Canvas Area */}
-            <div className="flex-1 p-6 flex flex-col items-center justify-center relative overflow-hidden bg-radial from-stone-800 to-stone-900">
+            {liveEmbedUrl ? (
+              <div className="flex-1 relative bg-stone-950 min-h-[360px]">
+                <iframe
+                  src={liveEmbedUrl}
+                  title={lesson.title}
+                  className="w-full h-full min-h-[360px] border-0"
+                  allowFullScreen
+                  scrolling="yes"
+                  allow="autoplay; fullscreen; clipboard-write"
+                />
+              </div>
+            ) : (
+              <>
+                <div className="flex-1 p-6 flex flex-col items-center justify-center relative overflow-hidden bg-radial from-stone-800 to-stone-900">
               {/* Slide Content by Number */}
               <div className="w-full max-w-lg bg-surface text-text rounded-lg border-2 border-stone-700 p-6 shadow-xl flex flex-col items-center text-center">
                 {currentSlide === 1 && (
@@ -318,16 +357,18 @@ export default function LessonModal({
                 ))}
               </div>
 
-              <button
-                type="button"
-                disabled={currentSlide >= totalSlides}
-                onClick={() => setCurrentSlide((prev) => Math.min(totalSlides, prev + 1))}
-                className="px-4 py-2 rounded bg-primary hover:bg-primary-hover disabled:opacity-30 disabled:cursor-not-allowed text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer text-white"
-              >
-                Next Slide
-                <ChevronRight className="w-4 h-4" />
-              </button>
-            </div>
+                <button
+                  type="button"
+                  disabled={currentSlide >= totalSlides}
+                  onClick={() => setCurrentSlide((prev) => Math.min(totalSlides, prev + 1))}
+                  className="px-4 py-2 rounded bg-primary hover:bg-primary-hover disabled:opacity-30 disabled:cursor-not-allowed text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer text-white"
+                >
+                  Next Slide
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
+              </>
+            )}
           </div>
 
           {/* Right Column: Teaching Script, Notes, Metadata */}

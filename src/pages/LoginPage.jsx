@@ -44,6 +44,13 @@ export default function LoginPage() {
     setError(null);
   };
 
+  const handleAdminFill = () => {
+    setEmail('admin@slpcurriculum.com');
+    setPassword('password123');
+    setIsRegisterMode(false);
+    setError(null);
+  };
+
   return (
     <div className="min-h-screen bg-bg flex flex-col items-center justify-center p-4">
       <div className="w-full max-w-md space-y-6">
@@ -62,17 +69,27 @@ export default function LoginPage() {
 
         {/* Auth Card */}
         <Card className="p-8 bg-surface border border-border shadow-xs space-y-6">
-          <div className="border-b border-border pb-4 flex items-center justify-between">
+          <div className="border-b border-border pb-4 flex items-center justify-between gap-2">
             <h2 className="font-heading text-lg font-bold text-text">
               {isRegisterMode ? 'Create Member Account' : 'Member Sign In'}
             </h2>
-            <button
-              type="button"
-              onClick={handleDemoFill}
-              className="text-xs font-semibold text-primary hover:underline cursor-pointer"
-            >
-              Demo Credentials
-            </button>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={handleDemoFill}
+                className="text-xs font-semibold text-primary hover:underline cursor-pointer"
+              >
+                Member Demo
+              </button>
+              <span className="text-stone-300">|</span>
+              <button
+                type="button"
+                onClick={handleAdminFill}
+                className="text-xs font-semibold text-tertiary hover:underline cursor-pointer"
+              >
+                Admin / VA Demo
+              </button>
+            </div>
           </div>
 
           {error && (

@@ -60,6 +60,11 @@ export const api = {
     return request(`/api/lessons?${query.toString()}`);
   },
   getLesson: (id) => request(`/api/lessons/${id}`),
+  createLesson: (data) =>
+    request('/api/lessons', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
 
   // Curriculums
   getCurriculums: () => request('/api/curriculums'),

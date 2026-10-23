@@ -19,6 +19,12 @@ export default function DashboardPage() {
 
   useEffect(() => {
     loadDashboard();
+    const handleCreated = (e) => {
+      loadDashboard();
+      if (e.detail) setActiveLesson(e.detail);
+    };
+    window.addEventListener('slp-lesson-created', handleCreated);
+    return () => window.removeEventListener('slp-lesson-created', handleCreated);
   }, []);
 
   const loadDashboard = async () => {

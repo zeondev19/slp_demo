@@ -111,6 +111,20 @@ export default function SearchLibraryPage() {
     loadMeta();
   }, []);
 
+  // Listen for newly created lessons from Admin modal
+  useEffect(() => {
+    const handleLessonCreated = (e) => {
+      clientQueryCache.current.clear();
+      if (e.detail) {
+        setLessons((prev) => [e.detail, ...prev]);
+        setTotal((prev) => prev + 1);
+        setActiveLesson(e.detail);
+      }
+    };
+    window.addEventListener('slp-lesson-created', handleLessonCreated);
+    return () => window.removeEventListener('slp-lesson-created', handleLessonCreated);
+  }, []);
+
   // Fetch lessons with query timer and client-side instant cache
   useEffect(() => {
     let isMounted = true;

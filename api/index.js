@@ -286,8 +286,78 @@ async function handleAuthRegister(req, res, body) {
 }
 
 // --- LESSONS ---
-async function handleLessons(req, res, segments) {
+async function handleLessons(req, res, segments, body) {
   const pool = getPool();
+
+  // POST /api/lessons (Create new lesson)
+  if (segments.length === 1 && req.method === 'POST') {
+    const user = verifyToken(req);
+    if (!user || user.role !== 'admin') {
+      return res.status(403).json({ error: 'Admin access required to add lessons.' });
+    }
+
+    const {
+      title,
+      description,
+      domain,
+      target,
+      level,
+      primary_skill,
+      secondary_skill,
+      activity_format = 'Interactive Genially Deck',
+      topic = 'School',
+      genially_embed_url,
+      teaching_script,
+      duration_minutes = 15,
+      materials = 'Interactive device (iPad / Laptop), token board.',
+      objectives,
+      preparation_notes,
+      curriculum_id = null,
+    } = body;
+
+    if (!title || !domain || !target || !level) {
+      return res.status(400).json({ error: 'Title, domain, target, and level are required.' });
+    }
+
+    const finalObjectives =
+      objectives || `Demonstrate mastery of ${target} at the ${level} level with 80% accuracy.`;
+
+    const [result] = await pool.execute(
+      `INSERT INTO slp_lessons (
+        title, description, curriculum_id, primary_skill, secondary_skill,
+        domain, target, level, activity_format, topic, genially_embed_url,
+        teaching_script, duration_minutes, materials, objectives, preparation_notes,
+        times_used, is_new, popularity_score, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1, 500, NOW(), NOW())`,
+      [
+        title,
+        description || '',
+        curriculum_id || null,
+        primary_skill || domain,
+        secondary_skill || null,
+        domain,
+        target,
+        level,
+        activity_format,
+        topic || 'School',
+        genially_embed_url || null,
+        teaching_script || '',
+        parseInt(duration_minutes) || 15,
+        materials,
+        finalObjectives,
+        preparation_notes || null,
+      ]
+    );
+
+    // Clear in-memory lesson cache so new lesson shows immediately
+    memoryCache.clear();
+
+    const [rows] = await pool.execute('SELECT * FROM slp_lessons WHERE id = ? LIMIT 1', [
+      result.insertId,
+    ]);
+
+    return res.status(201).json({ lesson: rows[0] || { id: result.insertId, title, domain, target, level } });
+  }
 
   // GET /api/lessons/:id
   if (segments.length >= 2) {
@@ -411,7 +481,7 @@ async function handleLessons(req, res, segments) {
     SELECT 
       l.id, l.title, l.description, l.domain, l.primary_skill, l.secondary_skill,
       l.target, l.level, l.activity_format, l.topic, l.duration_minutes,
-      l.thumbnail_url, l.times_used, l.created_at
+      l.thumbnail_url, l.genially_embed_url, l.teaching_script, l.materials, l.objectives, l.preparation_notes, l.is_new, l.times_used, l.created_at
     FROM slp_lessons l
     ${whereSQL}
     ${orderSQL}
@@ -546,9 +616,9 @@ async function handleDashboard(req, res) {
   const [newlyAdded] = await pool.execute(
     `SELECT 
       id, title, description, domain, primary_skill, secondary_skill, target,
-      level, activity_format, duration_minutes, thumbnail_url, created_at
+      level, activity_format, duration_minutes, thumbnail_url, genially_embed_url, teaching_script, materials, objectives, preparation_notes, is_new, created_at
     FROM slp_lessons
-    ORDER BY created_at DESC
+    ORDER BY created_at DESC, id DESC
     LIMIT 8`
   );
 

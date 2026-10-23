@@ -1,11 +1,15 @@
+import { useState } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
-import { Home, Search, BookOpen, FolderOpen, LogOut, User, Sparkles } from 'lucide-react';
+import { Home, Search, BookOpen, FolderOpen, LogOut, PlusCircle } from 'lucide-react';
 import PerformanceBar from './PerformanceBar';
+import AddLessonModal from '../AddLessonModal';
 import { useAuth } from '../../contexts/AuthContext';
 
 export default function AppLayout() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const [addModalOpen, setAddModalOpen] = useState(false);
+  const isAdmin = user?.role === 'admin' || user?.email?.toLowerCase().includes('admin');
 
   const handleLogout = () => {
     logout();
@@ -70,12 +74,23 @@ export default function AppLayout() {
 
         {/* User Account / Logout */}
         <div className="flex items-center gap-3">
+          {isAdmin && (
+            <button
+              type="button"
+              onClick={() => setAddModalOpen(true)}
+              className="h-9 px-3 rounded-lg bg-primary text-white hover:bg-primary-hover text-xs font-semibold flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer"
+            >
+              <PlusCircle className="w-4 h-4" />
+              <span>Add Lesson</span>
+            </button>
+          )}
+
           <div className="hidden sm:flex flex-col text-right">
             <span className="text-xs font-bold text-text truncate max-w-[160px]">
               {user?.display_name || 'Sarah Johnson, CCC-SLP'}
             </span>
             <span className="text-[10px] font-mono text-stone-400">
-              Active Member
+              {isAdmin ? 'Admin / VA Portal' : 'Active Member'}
             </span>
           </div>
 
@@ -120,6 +135,11 @@ export default function AppLayout() {
           );
         })}
       </nav>
+      {/* 5. Admin / VA Add Lesson Modal */}
+      <AddLessonModal
+        isOpen={addModalOpen}
+        onClose={() => setAddModalOpen(false)}
+      />
     </div>
   );
 }
