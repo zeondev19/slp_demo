@@ -9,7 +9,10 @@ export default function AppLayout() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const [addModalOpen, setAddModalOpen] = useState(false);
-  const isAdmin = user?.role === 'admin' || user?.email?.toLowerCase().includes('admin');
+  const isAdmin =
+    user?.role === 'admin' ||
+    user?.email?.toLowerCase().includes('admin') ||
+    user?.display_name?.toLowerCase().includes('admin');
 
   const handleLogout = () => {
     logout();

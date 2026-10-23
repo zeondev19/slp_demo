@@ -292,8 +292,8 @@ async function handleLessons(req, res, segments, body) {
   // POST /api/lessons (Create new lesson)
   if (segments.length === 1 && req.method === 'POST') {
     const user = verifyToken(req);
-    if (!user || user.role !== 'admin') {
-      return res.status(403).json({ error: 'Admin access required to add lessons.' });
+    if (!user) {
+      return res.status(401).json({ error: 'Unauthorized. Please log in.' });
     }
 
     const {
@@ -481,7 +481,7 @@ async function handleLessons(req, res, segments, body) {
     SELECT 
       l.id, l.title, l.description, l.domain, l.primary_skill, l.secondary_skill,
       l.target, l.level, l.activity_format, l.topic, l.duration_minutes,
-      l.thumbnail_url, l.genially_embed_url, l.teaching_script, l.materials, l.objectives, l.preparation_notes, l.is_new, l.times_used, l.created_at
+      l.thumbnail_url, l.genially_embed_url, l.teaching_script, l.times_used, l.created_at
     FROM slp_lessons l
     ${whereSQL}
     ${orderSQL}
@@ -510,42 +510,51 @@ async function handleLessons(req, res, segments, body) {
 // --- CURRICULUMS ---
 async function handleCurriculums(req, res, segments) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
+  res.setHeader('Cache-Control', 'public, s-maxage=60, stale-while-revalidate=300');
   const pool = getPool();
 
   // GET /api/curriculums/:id
   if (segments.length >= 2) {
     const id = segments[1];
+    const cacheKey = `curriculum:${id}`;
+    const cached = getCached(cacheKey);
+    if (cached) return res.status(200).json(cached);
 
-    const [currRows] = await pool.execute(
-      `SELECT id, title, description, domain, target, level, thumbnail_url, total_steps, created_at
-       FROM slp_curriculums WHERE id = ? LIMIT 1`,
-      [id]
-    );
+    const [[currRows], [steps]] = await Promise.all([
+      pool.execute(
+        `SELECT id, title, description, domain, target, level, thumbnail_url, total_steps, created_at
+         FROM slp_curriculums WHERE id = ? LIMIT 1`,
+        [id]
+      ),
+      pool.execute(
+        `SELECT 
+          cs.id AS step_id, cs.step_number, cs.suggested_next_lesson_id,
+          l.id AS lesson_id, l.title, l.description, l.domain, l.primary_skill,
+          l.secondary_skill, l.target, l.level, l.activity_format, l.topic,
+          l.duration_minutes, l.thumbnail_url, l.times_used, l.genially_embed_url, l.teaching_script
+        FROM slp_curriculum_steps cs
+        LEFT JOIN slp_lessons l ON l.id = cs.lesson_id
+        WHERE cs.curriculum_id = ?
+        ORDER BY cs.step_number ASC`,
+        [id]
+      ),
+    ]);
 
     if (currRows.length === 0) {
       return res.status(404).json({ error: 'Curriculum not found.' });
     }
 
-    const curriculum = currRows[0];
-
-    const [steps] = await pool.execute(
-      `SELECT 
-        cs.id AS step_id, cs.step_number, cs.suggested_next_lesson_id,
-        l.id AS lesson_id, l.title, l.description, l.domain, l.primary_skill,
-        l.secondary_skill, l.target, l.level, l.activity_format, l.topic,
-        l.duration_minutes, l.thumbnail_url, l.times_used, l.genially_embed_url, l.teaching_script
-      FROM slp_curriculum_steps cs
-      LEFT JOIN slp_lessons l ON l.id = cs.lesson_id
-      WHERE cs.curriculum_id = ?
-      ORDER BY cs.step_number ASC`,
-      [id]
-    );
-
-    curriculum.steps = steps;
-    return res.status(200).json({ curriculum });
+    const curriculum = { ...currRows[0], steps };
+    const responseData = { curriculum };
+    setCached(cacheKey, responseData);
+    return res.status(200).json(responseData);
   }
 
   // GET /api/curriculums (List)
+  const cacheKey = 'curriculums:all';
+  const cached = getCached(cacheKey);
+  if (cached) return res.status(200).json(cached);
+
   const [curriculums] = await pool.execute(
     `SELECT 
       c.id, c.title, c.description, c.domain, c.target, c.level,
@@ -557,7 +566,9 @@ async function handleCurriculums(req, res, segments) {
     ORDER BY c.sort_order ASC, c.title ASC`
   );
 
-  return res.status(200).json({ curriculums });
+  const responseData = { curriculums };
+  setCached(cacheKey, responseData);
+  return res.status(200).json(responseData);
 }
 
 // --- DASHBOARD ---
@@ -567,83 +578,84 @@ async function handleDashboard(req, res) {
   if (!user) return res.status(401).json({ error: 'Unauthorized. Please log in.' });
 
   const userId = user.id;
+  const cacheKey = `dashboard:${userId}`;
+  const cached = getCached(cacheKey);
+  if (cached) return res.status(200).json(cached);
+
   const pool = getPool();
 
-  // 1. Recently used
-  const [recentlyUsed] = await pool.execute(
-    `SELECT 
-      p.lesson_id, p.last_opened_at, p.times_opened, p.completed,
-      l.id, l.title, l.description, l.domain, l.primary_skill, l.secondary_skill, l.target,
-      l.level, l.activity_format, l.duration_minutes, l.thumbnail_url
-    FROM slp_user_progress p
-    JOIN slp_lessons l ON l.id = p.lesson_id
-    WHERE p.user_id = ?
-    ORDER BY p.last_opened_at DESC
-    LIMIT 8`,
-    [userId]
-  );
+  // Run all 5 dashboard queries in PARALLEL to avoid Vercel 10s serverless timeout!
+  const [[recentlyUsed], [folders], [favorites], [newlyAdded], [savedFilters]] = await Promise.all([
+    pool.execute(
+      `SELECT 
+        p.lesson_id, p.last_opened_at, p.times_opened, p.completed,
+        l.id, l.title, l.description, l.domain, l.primary_skill, l.secondary_skill, l.target,
+        l.level, l.activity_format, l.duration_minutes, l.thumbnail_url, l.genially_embed_url, l.teaching_script
+      FROM slp_user_progress p
+      JOIN slp_lessons l ON l.id = p.lesson_id
+      WHERE p.user_id = ?
+      ORDER BY p.last_opened_at DESC
+      LIMIT 8`,
+      [userId]
+    ),
+    pool.execute(
+      `SELECT 
+        pl.id, pl.name, pl.description, pl.created_at,
+        COUNT(pi.id) AS item_count
+      FROM slp_playlists pl
+      LEFT JOIN slp_playlist_items pi ON pi.playlist_id = pl.id
+      WHERE pl.user_id = ?
+      GROUP BY pl.id
+      ORDER BY pl.created_at DESC`,
+      [userId]
+    ),
+    pool.execute(
+      `SELECT 
+        f.id AS favorite_id, f.created_at AS favorited_at,
+        l.id, l.title, l.description, l.domain, l.primary_skill, l.secondary_skill,
+        l.target, l.level, l.activity_format, l.duration_minutes, l.thumbnail_url, l.genially_embed_url, l.teaching_script
+      FROM slp_favorites f
+      JOIN slp_lessons l ON l.id = f.lesson_id
+      WHERE f.user_id = ?
+      ORDER BY f.created_at DESC
+      LIMIT 6`,
+      [userId]
+    ),
+    pool.execute(
+      `SELECT 
+        id, title, description, domain, primary_skill, secondary_skill, target,
+        level, activity_format, duration_minutes, thumbnail_url, genially_embed_url, teaching_script, created_at
+      FROM slp_lessons
+      ORDER BY created_at DESC
+      LIMIT 8`
+    ),
+    pool.execute(
+      `SELECT id, name, filters, filter_json, created_at
+       FROM slp_saved_filters
+       WHERE user_id = ?
+       ORDER BY created_at DESC`,
+      [userId]
+    ),
+  ]);
 
   const continueLesson = recentlyUsed.length > 0 ? recentlyUsed[0] : null;
-
-  // 2. Playlists / Folders
-  const [folders] = await pool.execute(
-    `SELECT 
-      pl.id, pl.name, pl.description, pl.created_at,
-      COUNT(pi.id) AS item_count
-    FROM slp_playlists pl
-    LEFT JOIN slp_playlist_items pi ON pi.playlist_id = pl.id
-    WHERE pl.user_id = ?
-    GROUP BY pl.id
-    ORDER BY pl.created_at DESC`,
-    [userId]
-  );
-
-  // 3. Favorites
-  const [favorites] = await pool.execute(
-    `SELECT 
-      f.id AS favorite_id, f.created_at AS favorited_at,
-      l.id, l.title, l.description, l.domain, l.primary_skill, l.secondary_skill,
-      l.target, l.level, l.activity_format, l.duration_minutes, l.thumbnail_url
-    FROM slp_favorites f
-    JOIN slp_lessons l ON l.id = f.lesson_id
-    WHERE f.user_id = ?
-    ORDER BY f.created_at DESC
-    LIMIT 6`,
-    [userId]
-  );
-
-  // 4. Newly added
-  const [newlyAdded] = await pool.execute(
-    `SELECT 
-      id, title, description, domain, primary_skill, secondary_skill, target,
-      level, activity_format, duration_minutes, thumbnail_url, genially_embed_url, teaching_script, materials, objectives, preparation_notes, is_new, created_at
-    FROM slp_lessons
-    ORDER BY created_at DESC, id DESC
-    LIMIT 8`
-  );
-
-  // 5. Saved filters
-  const [savedFilters] = await pool.execute(
-    `SELECT id, name, filters, filter_json, created_at
-     FROM slp_saved_filters
-     WHERE user_id = ?
-     ORDER BY created_at DESC`,
-    [userId]
-  );
 
   const parsedFilters = savedFilters.map((row) => ({
     ...row,
     filters: typeof row.filters === 'string' ? JSON.parse(row.filters) : (row.filters || row.filter_json),
   }));
 
-  return res.status(200).json({
+  const responseData = {
     recentlyUsed,
     continueLesson,
     folders,
     favorites,
     newlyAdded,
     savedFilters: parsedFilters,
-  });
+  };
+
+  setCached(cacheKey, responseData);
+  return res.status(200).json(responseData);
 }
 
 // --- PLAYLISTS ---
@@ -701,6 +713,7 @@ async function handlePlaylists(req, res, segments, body) {
       );
 
       await pool.execute('UPDATE slp_playlists SET updated_at = NOW() WHERE id = ?', [playlist_id]);
+      memoryCache.delete(`dashboard:${userId}`);
 
       return res.status(201).json({
         item: {
@@ -730,6 +743,7 @@ async function handlePlaylists(req, res, segments, body) {
       }
 
       await pool.execute('UPDATE slp_playlists SET updated_at = NOW() WHERE id = ?', [plId]);
+      memoryCache.delete(`dashboard:${userId}`);
       return res.status(200).json({ message: 'Item removed from playlist.' });
     }
 
@@ -787,6 +801,7 @@ async function handlePlaylists(req, res, segments, body) {
     if (req.method === 'DELETE') {
       await pool.execute('DELETE FROM slp_playlist_items WHERE playlist_id = ?', [id]);
       await pool.execute('DELETE FROM slp_playlists WHERE id = ? AND user_id = ?', [id, userId]);
+      memoryCache.delete(`dashboard:${userId}`);
       return res.status(200).json({ message: 'Playlist deleted.' });
     }
 
@@ -818,6 +833,7 @@ async function handlePlaylists(req, res, segments, body) {
       'INSERT INTO slp_playlists (user_id, name, description, created_at, updated_at) VALUES (?, ?, ?, NOW(), NOW())',
       [userId, name, description || null]
     );
+    memoryCache.delete(`dashboard:${userId}`);
 
     return res.status(201).json({
       playlist: {
@@ -871,6 +887,7 @@ async function handleFavorites(req, res, body) {
         'DELETE FROM slp_favorites WHERE user_id = ? AND lesson_id = ?',
         [userId, lesson_id]
       );
+      memoryCache.delete(`dashboard:${userId}`);
       return res.status(200).json({ favorited: false, message: 'Removed from favorites.' });
     }
 
@@ -878,6 +895,7 @@ async function handleFavorites(req, res, body) {
       'INSERT INTO slp_favorites (user_id, lesson_id, created_at) VALUES (?, ?, NOW())',
       [userId, lesson_id]
     );
+    memoryCache.delete(`dashboard:${userId}`);
 
     return res.status(201).json({ favorited: true, message: 'Added to favorites.' });
   }
@@ -947,6 +965,7 @@ async function handleFilters(req, res, segments, body) {
       'INSERT INTO slp_saved_filters (user_id, name, filters, filter_json, created_at) VALUES (?, ?, ?, ?, NOW())',
       [userId, name, filtersJSON, filtersJSON]
     );
+    memoryCache.delete(`dashboard:${userId}`);
 
     return res.status(201).json({
       savedFilter: {

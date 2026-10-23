@@ -33,9 +33,8 @@ export default function DashboardPage() {
       setError(null);
       const res = await api.getDashboard();
       setData(res);
-      // Load favorites
-      const favRes = await api.getFavorites();
-      setFavorites(favRes.ids || (favRes.favorites || []).map((f) => f.id || f.lesson_id));
+      // Extract favorite IDs directly from dashboard response (eliminates 2nd network request!)
+      setFavorites((res.favorites || []).map((f) => f.id || f.lesson_id));
     } catch (err) {
       console.error('Failed to load dashboard:', err);
       setError('Could not load dashboard content. Please check your connection.');
