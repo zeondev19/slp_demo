@@ -5,6 +5,7 @@ import {
   RotateCcw, SlidersHorizontal, ChevronDown, Check, Sparkles 
 } from 'lucide-react';
 import { api } from '../lib/api';
+import { useAuth } from '../contexts/AuthContext';
 import LessonCard from '../components/LessonCard';
 import LessonModal from '../components/LessonModal';
 import Spinner from '../components/ui/Spinner';
@@ -54,6 +55,11 @@ const TOPICS = [
 ];
 
 export default function SearchLibraryPage() {
+  const { user } = useAuth();
+  const isAdmin =
+    user?.role === 'admin' ||
+    user?.email?.toLowerCase().includes('admin') ||
+    user?.display_name?.toLowerCase().includes('admin');
   const [searchParams, setSearchParams] = useSearchParams();
 
   // Search and Filter states initialized from URL params
@@ -193,25 +199,37 @@ export default function SearchLibraryPage() {
   }, [query, selectedDomain, selectedTarget, selectedLevel, selectedFormat, selectedTopic, sortBy, page, updateURL]);
 
   const handleFavoriteToggle = async (lessonId) => {
+    const isCurrentlyFav = favorites.includes(lessonId);
+    // Optimistic 0ms UI update
+    setFavorites((prev) =>
+      isCurrentlyFav ? prev.filter((id) => id !== lessonId) : [...prev, lessonId]
+    );
     try {
-      const res = await api.toggleFavorite(lessonId);
-      if (res && res.favorites) {
-        setFavorites(res.favorites);
-      } else {
-        setFavorites((prev) =>
-          prev.includes(lessonId) ? prev.filter((id) => id !== lessonId) : [...prev, lessonId]
-        );
-      }
+      await api.toggleFavorite(lessonId, !isCurrentlyFav);
     } catch (err) {
       console.error('Failed to favorite:', err);
     }
   };
 
-  const handleAddToFolder = async (playlistId, lessonId) => {
-    try {
-      await api.addToPlaylist(playlistId, lessonId);
-    } catch (err) {
+  const handleAddToFolder = (playlistId, lessonId) => {
+    // Optimistic non-blocking call
+    api.addToPlaylist(playlistId, lessonId).catch((err) => {
       console.error('Failed to add to folder:', err);
+    });
+  };
+
+  const handleDeleteLesson = async (lessonId) => {
+    if (!window.confirm('Delete this lesson from the library?')) return;
+    // Optimistic 0ms removal from screen
+    clientQueryCache.current.clear();
+    setLessons((prev) => prev.filter((l) => l.id !== lessonId));
+    setTotal((prev) => Math.max(0, prev - 1));
+    if (activeLesson?.id === lessonId) setActiveLesson(null);
+    localStorage.removeItem('slp_dashboard_cache');
+    try {
+      await api.deleteLesson(lessonId);
+    } catch (err) {
+      console.error('Failed to delete lesson:', err);
     }
   };
 
@@ -609,6 +627,8 @@ export default function SearchLibraryPage() {
                   isFavorited={favorites.includes(lesson.id)}
                   onAddToFolder={handleAddToFolder}
                   userPlaylists={userPlaylists}
+                  canDelete={isAdmin}
+                  onDelete={handleDeleteLesson}
                 />
               ))}
             </div>
@@ -741,6 +761,8 @@ export default function SearchLibraryPage() {
         onFavorite={handleFavoriteToggle}
         userPlaylists={userPlaylists}
         onAddToFolder={handleAddToFolder}
+        canDelete={isAdmin}
+        onDelete={handleDeleteLesson}
       />
     </div>
   );

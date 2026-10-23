@@ -139,9 +139,28 @@ if ($path === 'lessons' && $method === 'POST') {
     ]);
 
     $newId = (int)$pdo->lastInsertId();
-    $fetchStmt = $pdo->prepare("SELECT * FROM slp_lessons WHERE id = ? LIMIT 1");
-    $fetchStmt->execute([$newId]);
-    $lesson = $fetchStmt->fetch();
+    $lesson = [
+        'id'                 => $newId ?: time(),
+        'title'              => $title,
+        'description'        => $description,
+        'curriculum_id'      => $curriculumId,
+        'primary_skill'      => $primarySkill,
+        'secondary_skill'    => $secondarySkill,
+        'domain'             => $domain,
+        'target'             => $target,
+        'level'              => $level,
+        'activity_format'    => $activityFormat,
+        'topic'              => $topic,
+        'genially_embed_url' => $geniallyEmbedUrl,
+        'teaching_script'    => $teachingScript,
+        'duration_minutes'   => $durationMinutes,
+        'materials'          => $materials,
+        'objectives'         => $objectives,
+        'preparation_notes'  => $prepNotes,
+        'times_used'         => 0,
+        'is_new'             => 1,
+        'popularity_score'   => 500,
+    ];
 
     http_response_code(201);
     echo json_encode(['lesson' => $lesson]);
@@ -217,10 +236,16 @@ if ($path === 'lessons' && $method === 'GET') {
 }
 
 // -------------------------------------------------------------
-// Route: /lessons/:id (Single lesson)
+// Route: /lessons/:id (Single lesson GET & DELETE)
 // -------------------------------------------------------------
 if (preg_match('#^lessons/(\d+)$#', $path, $matches)) {
     $lessonId = (int)$matches[1];
+    if ($method === 'DELETE') {
+        $delStmt = $pdo->prepare("DELETE FROM slp_lessons WHERE id = ?");
+        $delStmt->execute([$lessonId]);
+        echo json_encode(['message' => 'Lesson deleted', 'id' => $lessonId]);
+        exit;
+    }
     $stmt = $pdo->prepare("SELECT * FROM slp_lessons WHERE id = ? LIMIT 1");
     $stmt->execute([$lessonId]);
     $lesson = $stmt->fetch();

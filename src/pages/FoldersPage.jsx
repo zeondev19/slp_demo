@@ -79,14 +79,23 @@ export default function FoldersPage() {
     e.preventDefault();
     if (!newFolderName.trim()) return;
 
+    const tempFolder = {
+      id: Date.now(),
+      name: newFolderName.trim(),
+      description: newFolderDesc.trim(),
+      item_count: 0,
+      items: [],
+    };
+    setPlaylists((prev) => [tempFolder, ...prev]);
+    setNewFolderName('');
+    setNewFolderDesc('');
+    setNewFolderModal(false);
+
     try {
       await api.createPlaylist({
-        name: newFolderName.trim(),
-        description: newFolderDesc.trim(),
+        name: tempFolder.name,
+        description: tempFolder.description,
       });
-      setNewFolderName('');
-      setNewFolderDesc('');
-      setNewFolderModal(false);
       await loadPlaylists();
     } catch (err) {
       console.error('Failed to create folder:', err);
@@ -97,12 +106,13 @@ export default function FoldersPage() {
     e.stopPropagation();
     if (!window.confirm('Are you sure you want to delete this folder?')) return;
 
+    setPlaylists((prev) => prev.filter((p) => p.id !== id));
+    if (selectedPlaylist?.id === id) {
+      setSelectedPlaylist(null);
+    }
+
     try {
       await api.deletePlaylist(id);
-      if (selectedPlaylist?.id === id) {
-        setSelectedPlaylist(null);
-      }
-      await loadPlaylists();
     } catch (err) {
       console.error('Failed to delete folder:', err);
     }
@@ -112,10 +122,15 @@ export default function FoldersPage() {
     e.stopPropagation();
     if (!editName.trim()) return;
 
+    const newName = editName.trim();
+    setEditingId(null);
+    setPlaylists((prev) => prev.map((p) => (p.id === id ? { ...p, name: newName } : p)));
+    if (selectedPlaylist?.id === id) {
+      setSelectedPlaylist((prev) => (prev ? { ...prev, name: newName } : prev));
+    }
+
     try {
-      await api.updatePlaylist(id, { name: editName.trim() });
-      setEditingId(null);
-      await loadPlaylists();
+      await api.updatePlaylist(id, { name: newName });
     } catch (err) {
       console.error('Failed to rename folder:', err);
     }
@@ -125,11 +140,26 @@ export default function FoldersPage() {
     e.stopPropagation();
     if (!selectedPlaylist) return;
 
+    setSelectedPlaylist((prev) =>
+      prev
+        ? {
+            ...prev,
+            items: (prev.items || []).filter(
+              (it) => it.item_id !== itemId && it.id !== itemId && it.lesson_id !== itemId
+            ),
+          }
+        : prev
+    );
+    setPlaylists((prev) =>
+      prev.map((p) =>
+        p.id === selectedPlaylist.id
+          ? { ...p, item_count: Math.max(0, Number(p.item_count || 1) - 1) }
+          : p
+      )
+    );
+
     try {
       await api.removeFromPlaylist(selectedPlaylist.id, itemId);
-      const updated = await api.getPlaylist(selectedPlaylist.id);
-      setSelectedPlaylist(updated.playlist);
-      await loadPlaylists();
     } catch (err) {
       console.error('Failed to remove item:', err);
     }

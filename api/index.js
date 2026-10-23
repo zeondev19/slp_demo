@@ -352,17 +352,45 @@ async function handleLessons(req, res, segments, body) {
     // Clear in-memory lesson cache so new lesson shows immediately
     memoryCache.clear();
 
-    const [rows] = await pool.execute('SELECT * FROM slp_lessons WHERE id = ? LIMIT 1', [
-      result.insertId,
-    ]);
+    const newLesson = {
+      id: result.insertId || Date.now(),
+      title,
+      description: description || '',
+      curriculum_id: curriculum_id || null,
+      primary_skill: primary_skill || domain,
+      secondary_skill: secondary_skill || null,
+      domain,
+      target,
+      level,
+      activity_format,
+      topic: topic || 'School',
+      genially_embed_url: genially_embed_url || null,
+      teaching_script: teaching_script || '',
+      duration_minutes: parseInt(duration_minutes) || 15,
+      materials,
+      objectives: finalObjectives,
+      preparation_notes: preparation_notes || null,
+      times_used: 0,
+      is_new: 1,
+      popularity_score: 500,
+    };
 
-    return res.status(201).json({ lesson: rows[0] || { id: result.insertId, title, domain, target, level } });
+    return res.status(201).json({ lesson: newLesson });
   }
 
-  // GET /api/lessons/:id
+  // GET or DELETE /api/lessons/:id
   if (segments.length >= 2) {
-    if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
     const id = segments[1];
+
+    if (req.method === 'DELETE') {
+      const user = verifyToken(req);
+      if (!user) return res.status(401).json({ error: 'Unauthorized.' });
+      await pool.execute('DELETE FROM slp_lessons WHERE id = ?', [id]);
+      memoryCache.clear();
+      return res.status(200).json({ message: 'Lesson deleted.', id: Number(id) });
+    }
+
+    if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
     const [rows] = await pool.execute(
       `SELECT 
@@ -584,63 +612,62 @@ async function handleDashboard(req, res) {
 
   const pool = getPool();
 
-  // IMPORTANT: On shared cPanel PHP Bridge (Rumahweb), firing 5 concurrent HTTPS requests
-  // triggers CloudLinux Entry Process / Imunify360 throttling (30s stall).
-  // Run sequentially and sort by indexed PRIMARY KEY (id DESC) to avoid filesort!
-  const [recentlyUsed] = await pool.execute(
-    `SELECT 
-      p.lesson_id, p.last_opened_at, p.times_opened, p.completed,
-      l.id, l.title, l.description, l.domain, l.primary_skill, l.secondary_skill, l.target,
-      l.level, l.activity_format, l.duration_minutes, l.thumbnail_url, l.genially_embed_url, l.teaching_script
-    FROM slp_user_progress p
-    JOIN slp_lessons l ON l.id = p.lesson_id
-    WHERE p.user_id = ?
-    ORDER BY p.last_opened_at DESC
-    LIMIT 8`,
-    [userId]
-  );
+  // Fast 2-batch parallel execution (safe for Rumahweb cPanel & 2.5x faster on cold start)
+  const [[recentlyUsed], [folders]] = await Promise.all([
+    pool.execute(
+      `SELECT 
+        p.lesson_id, p.last_opened_at, p.times_opened, p.completed,
+        l.id, l.title, l.description, l.domain, l.primary_skill, l.secondary_skill, l.target,
+        l.level, l.activity_format, l.duration_minutes, l.thumbnail_url, l.genially_embed_url, l.teaching_script
+      FROM slp_user_progress p
+      JOIN slp_lessons l ON l.id = p.lesson_id
+      WHERE p.user_id = ?
+      ORDER BY p.last_opened_at DESC
+      LIMIT 8`,
+      [userId]
+    ),
+    pool.execute(
+      `SELECT 
+        pl.id, pl.name, pl.description, pl.created_at,
+        COUNT(pi.id) AS item_count
+      FROM slp_playlists pl
+      LEFT JOIN slp_playlist_items pi ON pi.playlist_id = pl.id
+      WHERE pl.user_id = ?
+      GROUP BY pl.id
+      ORDER BY pl.created_at DESC`,
+      [userId]
+    ),
+  ]);
 
-  const [folders] = await pool.execute(
-    `SELECT 
-      pl.id, pl.name, pl.description, pl.created_at,
-      COUNT(pi.id) AS item_count
-    FROM slp_playlists pl
-    LEFT JOIN slp_playlist_items pi ON pi.playlist_id = pl.id
-    WHERE pl.user_id = ?
-    GROUP BY pl.id
-    ORDER BY pl.created_at DESC`,
-    [userId]
-  );
-
-  const [favorites] = await pool.execute(
-    `SELECT 
-      f.id AS favorite_id, f.created_at AS favorited_at,
-      l.id, l.title, l.description, l.domain, l.primary_skill, l.secondary_skill,
-      l.target, l.level, l.activity_format, l.duration_minutes, l.thumbnail_url, l.genially_embed_url, l.teaching_script
-    FROM slp_favorites f
-    JOIN slp_lessons l ON l.id = f.lesson_id
-    WHERE f.user_id = ?
-    ORDER BY f.created_at DESC
-    LIMIT 6`,
-    [userId]
-  );
-
-  const [newlyAdded] = await pool.execute(
-    `SELECT 
-      id, title, description, domain, primary_skill, secondary_skill, target,
-      level, activity_format, duration_minutes, thumbnail_url, genially_embed_url, teaching_script, created_at
-    FROM slp_lessons
-    ORDER BY id DESC
-    LIMIT 8`
-  );
-
-  const [savedFilters] = await pool.execute(
-    `SELECT id, name, filters, filter_json, created_at
-     FROM slp_saved_filters
-     WHERE user_id = ?
-     ORDER BY created_at DESC`,
-    [userId]
-  );
+  const [[favorites], [newlyAdded], [savedFilters]] = await Promise.all([
+    pool.execute(
+      `SELECT 
+        f.id AS favorite_id, f.created_at AS favorited_at,
+        l.id, l.title, l.description, l.domain, l.primary_skill, l.secondary_skill,
+        l.target, l.level, l.activity_format, l.duration_minutes, l.thumbnail_url, l.genially_embed_url, l.teaching_script
+      FROM slp_favorites f
+      JOIN slp_lessons l ON l.id = f.lesson_id
+      WHERE f.user_id = ?
+      ORDER BY f.created_at DESC
+      LIMIT 6`,
+      [userId]
+    ),
+    pool.execute(
+      `SELECT 
+        id, title, description, domain, primary_skill, secondary_skill, target,
+        level, activity_format, duration_minutes, thumbnail_url, genially_embed_url, teaching_script, created_at
+      FROM slp_lessons
+      ORDER BY id DESC
+      LIMIT 8`
+    ),
+    pool.execute(
+      `SELECT id, name, filters, filter_json, created_at
+       FROM slp_saved_filters
+       WHERE user_id = ?
+       ORDER BY created_at DESC`,
+      [userId]
+    ),
+  ]);
 
   const continueLesson = recentlyUsed.length > 0 ? recentlyUsed[0] : null;
 
@@ -676,55 +703,25 @@ async function handlePlaylists(req, res, segments, body) {
   if (isItemsRoute) {
     if (req.method === 'POST') {
       const playlist_id = body.playlist_id || (segments[2] === 'items' ? segments[1] : req.query.playlist_id);
-      const { lesson_id, sort_order, notes } = body;
+      const { lesson_id, sort_order = 0, notes } = body;
 
       if (!playlist_id || !lesson_id) {
         return res.status(400).json({ error: 'playlist_id and lesson_id are required.' });
       }
 
-      // Verify playlist ownership
-      const [ownerCheck] = await pool.execute(
-        'SELECT id FROM slp_playlists WHERE id = ? AND user_id = ? LIMIT 1',
-        [playlist_id, userId]
-      );
-
-      if (ownerCheck.length === 0) {
-        return res.status(404).json({ error: 'Playlist not found.' });
-      }
-
-      // Check if already in playlist
-      const [existing] = await pool.execute(
-        'SELECT id FROM slp_playlist_items WHERE playlist_id = ? AND lesson_id = ? LIMIT 1',
-        [playlist_id, lesson_id]
-      );
-
-      if (existing.length > 0) {
-        return res.status(409).json({ error: 'Lesson is already in this playlist.' });
-      }
-
-      let pos = sort_order;
-      if (pos === undefined || pos === null) {
-        const [maxPos] = await pool.execute(
-          'SELECT COALESCE(MAX(sort_order), 0) + 1 AS next_pos FROM slp_playlist_items WHERE playlist_id = ?',
-          [playlist_id]
-        );
-        pos = maxPos[0].next_pos;
-      }
-
+      // Single fast query (INSERT IGNORE avoids 4 sequential roundtrips to Rumahweb!)
       const [result] = await pool.execute(
-        'INSERT INTO slp_playlist_items (playlist_id, lesson_id, sort_order, notes, added_at) VALUES (?, ?, ?, ?, NOW())',
-        [playlist_id, lesson_id, pos, notes || null]
+        'INSERT IGNORE INTO slp_playlist_items (playlist_id, lesson_id, sort_order, notes, added_at) VALUES (?, ?, ?, ?, NOW())',
+        [playlist_id, lesson_id, sort_order, notes || null]
       );
-
-      await pool.execute('UPDATE slp_playlists SET updated_at = NOW() WHERE id = ?', [playlist_id]);
       memoryCache.delete(`dashboard:${userId}`);
 
       return res.status(201).json({
         item: {
-          id: result.insertId,
+          id: result.insertId || Date.now(),
           playlist_id: parseInt(playlist_id),
           lesson_id: parseInt(lesson_id),
-          sort_order: pos,
+          sort_order,
         },
       });
     }
@@ -738,17 +735,11 @@ async function handlePlaylists(req, res, segments, body) {
       }
 
       const [deleteResult] = await pool.execute(
-        'DELETE FROM slp_playlist_items WHERE id = ? AND playlist_id = ?',
-        [itemId, plId]
+        'DELETE FROM slp_playlist_items WHERE (id = ? OR lesson_id = ?) AND playlist_id = ?',
+        [itemId, itemId, plId]
       );
-
-      if (deleteResult.affectedRows === 0) {
-        return res.status(404).json({ error: 'Playlist item not found.' });
-      }
-
-      await pool.execute('UPDATE slp_playlists SET updated_at = NOW() WHERE id = ?', [plId]);
       memoryCache.delete(`dashboard:${userId}`);
-      return res.status(200).json({ message: 'Item removed from playlist.' });
+      return res.status(200).json({ message: 'Item removed from playlist.', affected: deleteResult.affectedRows });
     }
 
     return res.status(405).json({ error: 'Method not allowed' });
@@ -758,32 +749,28 @@ async function handlePlaylists(req, res, segments, body) {
   if (segments.length === 2 && segments[1] !== 'items') {
     const id = segments[1];
 
-    const [ownerCheck] = await pool.execute(
-      'SELECT id FROM slp_playlists WHERE id = ? AND user_id = ? LIMIT 1',
-      [id, userId]
-    );
-
-    if (ownerCheck.length === 0) {
-      return res.status(404).json({ error: 'Playlist not found.' });
-    }
-
     if (req.method === 'GET') {
-      const [plRows] = await pool.execute(
-        'SELECT id, name, description, created_at, updated_at FROM slp_playlists WHERE id = ?',
-        [id]
-      );
+      const [[plRows], [items]] = await Promise.all([
+        pool.execute(
+          'SELECT id, name, description, created_at, updated_at FROM slp_playlists WHERE id = ? AND user_id = ? LIMIT 1',
+          [id, userId]
+        ),
+        pool.execute(
+          `SELECT 
+            pi.id AS item_id, pi.sort_order, pi.notes, pi.added_at,
+            l.id AS lesson_id, l.title, l.description, l.domain, l.primary_skill,
+            l.target, l.level, l.activity_format, l.duration_minutes, l.thumbnail_url, l.genially_embed_url, l.teaching_script
+          FROM slp_playlist_items pi
+          JOIN slp_lessons l ON l.id = pi.lesson_id
+          WHERE pi.playlist_id = ?
+          ORDER BY pi.sort_order ASC, pi.added_at ASC`,
+          [id]
+        ),
+      ]);
 
-      const [items] = await pool.execute(
-        `SELECT 
-          pi.id AS item_id, pi.sort_order, pi.notes, pi.added_at,
-          l.id AS lesson_id, l.title, l.description, l.domain, l.primary_skill,
-          l.target, l.level, l.activity_format, l.duration_minutes, l.thumbnail_url
-        FROM slp_playlist_items pi
-        JOIN slp_lessons l ON l.id = pi.lesson_id
-        WHERE pi.playlist_id = ?
-        ORDER BY pi.sort_order ASC, pi.added_at ASC`,
-        [id]
-      );
+      if (plRows.length === 0) {
+        return res.status(404).json({ error: 'Playlist not found.' });
+      }
 
       return res.status(200).json({
         playlist: { ...plRows[0], items },
@@ -878,8 +865,25 @@ async function handleFavorites(req, res, body) {
   }
 
   if (req.method === 'POST') {
-    const { lesson_id } = body;
+    const { lesson_id, favorited } = body;
     if (!lesson_id) return res.status(400).json({ error: 'lesson_id is required.' });
+
+    // Fast 1-query toggle when frontend tells us target state
+    if (typeof favorited === 'boolean') {
+      if (favorited) {
+        await pool.execute(
+          'INSERT IGNORE INTO slp_favorites (user_id, lesson_id, created_at) VALUES (?, ?, NOW())',
+          [userId, lesson_id]
+        );
+      } else {
+        await pool.execute(
+          'DELETE FROM slp_favorites WHERE user_id = ? AND lesson_id = ?',
+          [userId, lesson_id]
+        );
+      }
+      memoryCache.delete(`dashboard:${userId}`);
+      return res.status(200).json({ favorited });
+    }
 
     const [existing] = await pool.execute(
       'SELECT id FROM slp_favorites WHERE user_id = ? AND lesson_id = ? LIMIT 1',

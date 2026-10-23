@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Search, Play, FolderOpen, ArrowRight, Heart, Sparkles, BookOpen, Clock } from 'lucide-react';
 import { api } from '../lib/api';
+import { useAuth } from '../contexts/AuthContext';
 import LessonCard from '../components/LessonCard';
 import LessonModal from '../components/LessonModal';
 import Spinner from '../components/ui/Spinner';
@@ -10,12 +11,32 @@ import Button from '../components/ui/Button';
 
 export default function DashboardPage() {
   const navigate = useNavigate();
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const { user } = useAuth();
+  const isAdmin =
+    user?.role === 'admin' ||
+    user?.email?.toLowerCase().includes('admin') ||
+    user?.display_name?.toLowerCase().includes('admin');
+  const [data, setData] = useState(() => {
+    try {
+      const cached = localStorage.getItem('slp_dashboard_cache');
+      return cached ? JSON.parse(cached) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [loading, setLoading] = useState(() => !localStorage.getItem('slp_dashboard_cache'));
   const [error, setError] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [activeLesson, setActiveLesson] = useState(null);
-  const [favorites, setFavorites] = useState([]);
+  const [favorites, setFavorites] = useState(() => {
+    try {
+      const cached = localStorage.getItem('slp_dashboard_cache');
+      const parsed = cached ? JSON.parse(cached) : null;
+      return (parsed?.favorites || []).map((f) => f.id || f.lesson_id);
+    } catch {
+      return [];
+    }
+  });
 
   useEffect(() => {
     loadDashboard();
@@ -29,15 +50,16 @@ export default function DashboardPage() {
 
   const loadDashboard = async () => {
     try {
-      setLoading(true);
+      if (!data) setLoading(true);
       setError(null);
       const res = await api.getDashboard();
       setData(res);
+      localStorage.setItem('slp_dashboard_cache', JSON.stringify(res));
       // Extract favorite IDs directly from dashboard response (eliminates 2nd network request!)
       setFavorites((res.favorites || []).map((f) => f.id || f.lesson_id));
     } catch (err) {
       console.error('Failed to load dashboard:', err);
-      setError('Could not load dashboard content. Please check your connection.');
+      if (!data) setError('Could not load dashboard content. Please check your connection.');
     } finally {
       setLoading(false);
     }
@@ -53,27 +75,56 @@ export default function DashboardPage() {
   };
 
   const handleFavoriteToggle = async (lessonId) => {
+    const isCurrentlyFav = favorites.includes(lessonId);
+    // Optimistic 0ms UI update
+    setFavorites((prev) =>
+      isCurrentlyFav ? prev.filter((id) => id !== lessonId) : [...prev, lessonId]
+    );
     try {
-      const res = await api.toggleFavorite(lessonId);
-      if (res && res.favorites) {
-        setFavorites(res.favorites);
-      } else {
-        setFavorites((prev) =>
-          prev.includes(lessonId) ? prev.filter((id) => id !== lessonId) : [...prev, lessonId]
-        );
-      }
+      await api.toggleFavorite(lessonId, !isCurrentlyFav);
     } catch (err) {
       console.error('Failed to toggle favorite:', err);
     }
   };
 
-  const handleAddToFolder = async (playlistId, lessonId) => {
-    try {
-      await api.addToPlaylist(playlistId, lessonId);
-      const updatedDash = await api.getDashboard();
-      setData(updatedDash);
-    } catch (err) {
+  const handleAddToFolder = (playlistId, lessonId) => {
+    // Optimistic 0ms UI update of folder item count
+    setData((prev) => {
+      if (!prev) return prev;
+      const updated = {
+        ...prev,
+        folders: (prev.folders || []).map((f) =>
+          f.id === playlistId ? { ...f, item_count: Number(f.item_count || 0) + 1 } : f
+        ),
+      };
+      localStorage.setItem('slp_dashboard_cache', JSON.stringify(updated));
+      return updated;
+    });
+    api.addToPlaylist(playlistId, lessonId).catch((err) => {
       console.error('Failed to add to folder:', err);
+    });
+  };
+
+  const handleDeleteLesson = async (lessonId) => {
+    if (!window.confirm('Delete this lesson from the library?')) return;
+    if (activeLesson?.id === lessonId) setActiveLesson(null);
+    setData((prev) => {
+      if (!prev) return prev;
+      const filterOut = (arr) => (arr || []).filter((item) => item.id !== lessonId);
+      const updated = {
+        ...prev,
+        recentlyUsed: filterOut(prev.recentlyUsed),
+        favorites: filterOut(prev.favorites),
+        newlyAdded: filterOut(prev.newlyAdded),
+        continueLesson: prev.continueLesson?.id === lessonId ? null : prev.continueLesson,
+      };
+      localStorage.setItem('slp_dashboard_cache', JSON.stringify(updated));
+      return updated;
+    });
+    try {
+      await api.deleteLesson(lessonId);
+    } catch (err) {
+      console.error('Failed to delete lesson:', err);
     }
   };
 
@@ -296,6 +347,8 @@ export default function DashboardPage() {
               isFavorited={favorites.includes(lesson.id)}
               onAddToFolder={handleAddToFolder}
               userPlaylists={folders}
+              canDelete={isAdmin}
+              onDelete={handleDeleteLesson}
             />
           ))}
         </div>
@@ -328,6 +381,8 @@ export default function DashboardPage() {
                 isFavorited={true}
                 onAddToFolder={handleAddToFolder}
                 userPlaylists={folders}
+                canDelete={isAdmin}
+                onDelete={handleDeleteLesson}
               />
             ))}
           </div>
@@ -364,6 +419,8 @@ export default function DashboardPage() {
               isFavorited={favorites.includes(lesson.id)}
               onAddToFolder={handleAddToFolder}
               userPlaylists={folders}
+              canDelete={isAdmin}
+              onDelete={handleDeleteLesson}
             />
           ))}
         </div>
@@ -378,6 +435,8 @@ export default function DashboardPage() {
         onFavorite={handleFavoriteToggle}
         userPlaylists={folders}
         onAddToFolder={handleAddToFolder}
+        canDelete={isAdmin}
+        onDelete={handleDeleteLesson}
       />
     </div>
   );

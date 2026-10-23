@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Heart, Play, FolderPlus, Check, Sparkles, BookOpen, Clock } from 'lucide-react';
+import { Heart, Play, FolderPlus, Check, BookOpen, Clock, Trash2 } from 'lucide-react';
 import Badge from './ui/Badge';
 import Card from './ui/Card';
 
@@ -18,6 +18,8 @@ export default function LessonCard({
   isFavorited = false,
   onAddToFolder,
   userPlaylists = [],
+  onDelete,
+  canDelete = false,
 }) {
   const [showFolderDropdown, setShowFolderDropdown] = useState(false);
   const [addedNotice, setAddedNotice] = useState(null);
@@ -28,14 +30,14 @@ export default function LessonCard({
 
   const handleFolderClick = (e, playlist) => {
     e.stopPropagation();
+    setAddedNotice(playlist.name);
     if (onAddToFolder) {
       onAddToFolder(playlist.id, lesson.id);
-      setAddedNotice(playlist.name);
-      setTimeout(() => {
-        setAddedNotice(null);
-        setShowFolderDropdown(false);
-      }, 1500);
     }
+    setTimeout(() => {
+      setAddedNotice(null);
+      setShowFolderDropdown(false);
+    }, 900);
   };
 
   return (
@@ -54,6 +56,20 @@ export default function LessonCard({
               <span className="px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider bg-primary text-white rounded">
                 New
               </span>
+            )}
+            {canDelete && onDelete && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDelete(lesson.id);
+                }}
+                title="Delete lesson"
+                aria-label="Delete lesson"
+                className="w-8 h-8 rounded-full bg-white/90 hover:bg-red-50 border border-border flex items-center justify-center text-stone-400 hover:text-error transition-colors cursor-pointer"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
             )}
             <button
               type="button"

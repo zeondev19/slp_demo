@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { 
   X, Heart, FolderPlus, Play, RotateCcw, Volume2, 
   ChevronLeft, ChevronRight, CheckCircle2, Bookmark, 
-  ExternalLink, Sparkles, Clock, Target, Award
+  ExternalLink, Sparkles, Clock, Target, Award, Trash2
 } from 'lucide-react';
 import Badge from './ui/Badge';
 
@@ -25,6 +25,8 @@ export default function LessonModal({
   onFavorite,
   userPlaylists = [],
   onAddToFolder,
+  onDelete,
+  canDelete = false,
 }) {
   const [currentSlide, setCurrentSlide] = useState(1);
   const [therapistNotes, setTherapistNotes] = useState('');
@@ -77,14 +79,14 @@ export default function LessonModal({
   };
 
   const handleAddToFolderClick = (playlist) => {
+    setFolderNotice(playlist.name);
     if (onAddToFolder) {
       onAddToFolder(playlist.id, lesson.id);
-      setFolderNotice(playlist.name);
-      setTimeout(() => {
-        setFolderNotice(null);
-        setShowFolderDropdown(false);
-      }, 1500);
     }
+    setTimeout(() => {
+      setFolderNotice(null);
+      setShowFolderDropdown(false);
+    }, 900);
   };
 
   return (
@@ -107,6 +109,19 @@ export default function LessonModal({
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
+            {/* Delete Lesson Button (Admin) */}
+            {canDelete && onDelete && (
+              <button
+                type="button"
+                onClick={() => onDelete(lesson.id)}
+                className="h-9 px-3 rounded border border-red-200 bg-red-50/70 hover:bg-red-100 flex items-center gap-1.5 text-xs font-medium text-error transition-colors cursor-pointer"
+                title="Delete this lesson"
+              >
+                <Trash2 className="w-4 h-4" />
+                <span className="hidden sm:inline">Delete</span>
+              </button>
+            )}
+
             {/* Favorite Button */}
             <button
               type="button"

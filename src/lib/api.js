@@ -65,6 +65,10 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(data),
     }),
+  deleteLesson: (id) =>
+    request(`/api/lessons/${id}`, {
+      method: 'DELETE',
+    }),
 
   // Curriculums
   getCurriculums: () => request('/api/curriculums'),
@@ -100,10 +104,10 @@ export const api = {
 
   // Favorites
   getFavorites: () => request('/api/favorites'),
-  toggleFavorite: (lessonId) =>
+  toggleFavorite: (lessonId, favorited) =>
     request('/api/favorites', {
       method: 'POST',
-      body: JSON.stringify({ lesson_id: lessonId }),
+      body: JSON.stringify({ lesson_id: lessonId, ...(typeof favorited === 'boolean' ? { favorited } : {}) }),
     }),
 
   // Progress

@@ -118,8 +118,10 @@ export default function AddLessonModal({ isOpen, onClose, onCreated }) {
       };
 
       const res = await api.createLesson(payload);
+      const createdLesson = { ...payload, ...(res?.lesson || {}), id: res?.lesson?.id || Date.now(), is_new: 1 };
       setSuccess(true);
-      window.dispatchEvent(new CustomEvent('slp-lesson-created', { detail: res.lesson }));
+      localStorage.removeItem('slp_dashboard_cache');
+      window.dispatchEvent(new CustomEvent('slp-lesson-created', { detail: createdLesson }));
 
       setTimeout(() => {
         setSuccess(false);
@@ -127,9 +129,9 @@ export default function AddLessonModal({ isOpen, onClose, onCreated }) {
         setGeniallyRaw('');
         setDescription('');
         setTeachingScript('');
-        if (onCreated) onCreated(res.lesson);
+        if (onCreated) onCreated(createdLesson);
         onClose();
-      }, 900);
+      }, 600);
     } catch (err) {
       setError(err.message || 'Failed to save lesson to database.');
     } finally {
