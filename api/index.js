@@ -460,7 +460,7 @@ async function handleLessons(req, res, segments, body) {
       orderSQL = 'ORDER BY l.times_used DESC, l.created_at DESC';
       break;
     case 'newest':
-      orderSQL = 'ORDER BY l.created_at DESC';
+      orderSQL = 'ORDER BY l.id DESC';
       break;
     case 'relevant':
     default:
@@ -584,59 +584,63 @@ async function handleDashboard(req, res) {
 
   const pool = getPool();
 
-  // Run all 5 dashboard queries in PARALLEL to avoid Vercel 10s serverless timeout!
-  const [[recentlyUsed], [folders], [favorites], [newlyAdded], [savedFilters]] = await Promise.all([
-    pool.execute(
-      `SELECT 
-        p.lesson_id, p.last_opened_at, p.times_opened, p.completed,
-        l.id, l.title, l.description, l.domain, l.primary_skill, l.secondary_skill, l.target,
-        l.level, l.activity_format, l.duration_minutes, l.thumbnail_url, l.genially_embed_url, l.teaching_script
-      FROM slp_user_progress p
-      JOIN slp_lessons l ON l.id = p.lesson_id
-      WHERE p.user_id = ?
-      ORDER BY p.last_opened_at DESC
-      LIMIT 8`,
-      [userId]
-    ),
-    pool.execute(
-      `SELECT 
-        pl.id, pl.name, pl.description, pl.created_at,
-        COUNT(pi.id) AS item_count
-      FROM slp_playlists pl
-      LEFT JOIN slp_playlist_items pi ON pi.playlist_id = pl.id
-      WHERE pl.user_id = ?
-      GROUP BY pl.id
-      ORDER BY pl.created_at DESC`,
-      [userId]
-    ),
-    pool.execute(
-      `SELECT 
-        f.id AS favorite_id, f.created_at AS favorited_at,
-        l.id, l.title, l.description, l.domain, l.primary_skill, l.secondary_skill,
-        l.target, l.level, l.activity_format, l.duration_minutes, l.thumbnail_url, l.genially_embed_url, l.teaching_script
-      FROM slp_favorites f
-      JOIN slp_lessons l ON l.id = f.lesson_id
-      WHERE f.user_id = ?
-      ORDER BY f.created_at DESC
-      LIMIT 6`,
-      [userId]
-    ),
-    pool.execute(
-      `SELECT 
-        id, title, description, domain, primary_skill, secondary_skill, target,
-        level, activity_format, duration_minutes, thumbnail_url, genially_embed_url, teaching_script, created_at
-      FROM slp_lessons
-      ORDER BY created_at DESC
-      LIMIT 8`
-    ),
-    pool.execute(
-      `SELECT id, name, filters, filter_json, created_at
-       FROM slp_saved_filters
-       WHERE user_id = ?
-       ORDER BY created_at DESC`,
-      [userId]
-    ),
-  ]);
+  // IMPORTANT: On shared cPanel PHP Bridge (Rumahweb), firing 5 concurrent HTTPS requests
+  // triggers CloudLinux Entry Process / Imunify360 throttling (30s stall).
+  // Run sequentially and sort by indexed PRIMARY KEY (id DESC) to avoid filesort!
+  const [recentlyUsed] = await pool.execute(
+    `SELECT 
+      p.lesson_id, p.last_opened_at, p.times_opened, p.completed,
+      l.id, l.title, l.description, l.domain, l.primary_skill, l.secondary_skill, l.target,
+      l.level, l.activity_format, l.duration_minutes, l.thumbnail_url, l.genially_embed_url, l.teaching_script
+    FROM slp_user_progress p
+    JOIN slp_lessons l ON l.id = p.lesson_id
+    WHERE p.user_id = ?
+    ORDER BY p.last_opened_at DESC
+    LIMIT 8`,
+    [userId]
+  );
+
+  const [folders] = await pool.execute(
+    `SELECT 
+      pl.id, pl.name, pl.description, pl.created_at,
+      COUNT(pi.id) AS item_count
+    FROM slp_playlists pl
+    LEFT JOIN slp_playlist_items pi ON pi.playlist_id = pl.id
+    WHERE pl.user_id = ?
+    GROUP BY pl.id
+    ORDER BY pl.created_at DESC`,
+    [userId]
+  );
+
+  const [favorites] = await pool.execute(
+    `SELECT 
+      f.id AS favorite_id, f.created_at AS favorited_at,
+      l.id, l.title, l.description, l.domain, l.primary_skill, l.secondary_skill,
+      l.target, l.level, l.activity_format, l.duration_minutes, l.thumbnail_url, l.genially_embed_url, l.teaching_script
+    FROM slp_favorites f
+    JOIN slp_lessons l ON l.id = f.lesson_id
+    WHERE f.user_id = ?
+    ORDER BY f.created_at DESC
+    LIMIT 6`,
+    [userId]
+  );
+
+  const [newlyAdded] = await pool.execute(
+    `SELECT 
+      id, title, description, domain, primary_skill, secondary_skill, target,
+      level, activity_format, duration_minutes, thumbnail_url, genially_embed_url, teaching_script, created_at
+    FROM slp_lessons
+    ORDER BY id DESC
+    LIMIT 8`
+  );
+
+  const [savedFilters] = await pool.execute(
+    `SELECT id, name, filters, filter_json, created_at
+     FROM slp_saved_filters
+     WHERE user_id = ?
+     ORDER BY created_at DESC`,
+    [userId]
+  );
 
   const continueLesson = recentlyUsed.length > 0 ? recentlyUsed[0] : null;
 

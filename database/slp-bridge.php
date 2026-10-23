@@ -101,10 +101,63 @@ if ($clientSecret !== BRIDGE_SECRET) {
 }
 
 // -------------------------------------------------------------
-// POST REQUEST: EXECUTE QUERY
+// POST REQUEST: EXECUTE QUERY OR BATCH QUERIES
 // -------------------------------------------------------------
 $rawInput = file_get_contents('php://input');
 $data = json_decode($rawInput, true);
+
+function runSingleQuery($pdo, $sql, $params) {
+    $stmt = $pdo->prepare($sql);
+    foreach ($params as $idx => $val) {
+        $pos = $idx + 1;
+        if (is_int($val)) {
+            $stmt->bindValue($pos, $val, PDO::PARAM_INT);
+        } elseif (is_bool($val)) {
+            $stmt->bindValue($pos, $val, PDO::PARAM_BOOL);
+        } elseif (is_null($val)) {
+            $stmt->bindValue($pos, $val, PDO::PARAM_NULL);
+        } else {
+            $stmt->bindValue($pos, (string)$val, PDO::PARAM_STR);
+        }
+    }
+    $stmt->execute();
+    if (preg_match('/^\s*(SELECT|SHOW|DESCRIBE|EXPLAIN)/i', $sql)) {
+        return [
+            'rows'         => $stmt->fetchAll(),
+            'insertId'     => 0,
+            'affectedRows' => 0,
+        ];
+    }
+    return [
+        'rows'         => [],
+        'insertId'     => (int)$pdo->lastInsertId(),
+        'affectedRows' => $stmt->rowCount(),
+    ];
+}
+
+// Support batch queries in 1 single HTTP request + 1 MySQL connection
+if (isset($data['batch']) && is_array($data['batch'])) {
+    try {
+        $results = [];
+        foreach ($data['batch'] as $item) {
+            $qSql = trim($item['sql'] ?? '');
+            $qParams = isset($item['params']) && is_array($item['params']) ? $item['params'] : [];
+            $results[] = runSingleQuery($pdo, $qSql, $qParams);
+        }
+        echo json_encode([
+            'status'  => 'ok',
+            'results' => $results,
+        ]);
+    } catch (PDOException $e) {
+        http_response_code(500);
+        echo json_encode([
+            'status' => 'error',
+            'error'  => $e->getMessage(),
+            'code'   => $e->getCode(),
+        ]);
+    }
+    exit;
+}
 
 if (!isset($data['sql']) || !is_string($data['sql'])) {
     http_response_code(400);
